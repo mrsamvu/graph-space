@@ -1,0 +1,42 @@
+# ==========================================
+# Wails & Go (Backend)
+# ==========================================
+# Các file thực thi sau khi build thành công
+build/bin/
+build/windows/
+build/darwin/
+build/linux/
+
+
+# Các file chạy tạm, file nén do Wails sinh ra khi dev/build
+wails.exe
+wails
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+build/windows/icon.ico
+build/windows/info.rc
+
+
+# ==========================================
+# Frontend (React / Vite / Node)
+# ==========================================
+# Thư mục chứa thư viện frontend (Nằm trong thư mục frontend của Wails)
+**/frontend/node_modules/
+**/frontend/dist/
+
+# Các file log lỗi của npm/yarn/pnpm
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+# ==========================================
+# Bảo mật & Biến môi trường (Môi trường phát triển)
+# ==========================================
+.env
+.codex
+.agents

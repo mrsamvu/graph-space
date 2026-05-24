@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>GraphQL API Loader</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #fafafa; }
+        .btn { background: #ffde4d; border: 2px solid #000; padding: 10px 20px; font-weight: bold; cursor: pointer; box-shadow: 4px 4px 0px #000; }
+        .btn:active { box-shadow: 0px 0px 0px #000; transform: translate(4px, 4px); }
+        #result { margin-top: 20px; background: #fff; border: 2px solid #000; padding: 15px; max-height: 500px; overflow: auto; }
+        .api-item { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed #ccc; }
+        .type-query { color: #0076ff; font-weight: bold; }
+        .type-mutation { color: #d0021b; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h2>GraphQL API Explorer</h2>
+    <button class="btn" onclick="loadGraphQLSchema()">Tải danh sách API (Port 4000)</button>
+
+    <div id="result">Danh sách API sẽ hiển thị ở đây...</div>
+
+    <script>
+        async function loadGraphQLSchema() {
+            const endpoint = 'http://localhost:4000/graphql'; // Thay đổi đường dẫn nếu cần
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerText = "Đang tải...";
+
+            // Đoạn Query Introspection rút gọn để lấy danh sách Query và Mutation
+            const introspectionQuery = `
+                query {
+                    __schema {
+                        queryType { name fields { name description args { name type { name kind ofType { name } } } } }
+                        mutationType { name fields { name description args { name type { name kind ofType { name } } } } }
+                    }
+                }
+            `;
+
+            try {
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: introspectionQuery })
+                });
+
+                const json = await response.json();
+                
+                if (json.errors) {
+                    resultDiv.innerHTML = `<span style="color:red">Lỗi: ${JSON.stringify(json.errors)}</span>`;
+                    return;
+                }
+
+                const schema = json.data.__schema;
+                let htmlOutput = '<h3>Danh sách API tìm thấy:</h3>';
+
+                // 1. Duyệt qua các Queries
+                if (schema.queryType && schema.queryType.fields) {
+                    schema.queryType.fields.forEach(field => {
+                        htmlOutput += `<div class="api-item"><span class="type-query">[QUERY]</span> <strong>${field.name}</strong> - ${field.description || 'Không có mô tả'}</div>`;
+                    });
+                }
+
+                // 2. Duyệt qua các Mutations
+                if (schema.mutationType && schema.mutationType.fields) {
+                    schema.mutationType.fields.forEach(field => {
+                        htmlOutput += `<div class="api-item"><span class="type-mutation">[MUTATION]</span> <strong>${field.name}</strong> - ${field.description || 'Không có mô tả'}</div>`;
+                    });
+                }
+
+                resultDiv.innerHTML = htmlOutput;
+
+            } catch (error) {
+                resultDiv.innerHTML = `<span style="color:red">Không thể kết nối đến server: ${error.message}<br>Hãy chắc chắn server đã bật và đã bật CORS.</span>`;
+            }
+        }
+    </script>
+</body>
+</html>
