@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { GetUser } from '../../../wailsjs/go/services/UserService'
-// Định nghĩa kiểu cho params trong URL
+// Define type for URL params
 type PostParams = {
   id: string;
 };
 
 const PostDetail: React.FC = () => {
-    // Ép kiểu cho params để TS hiểu có biến 'id'
+    // Cast params so TS understands the 'id' variable
     const { id } = useParams<PostParams>();
     const [number, setNumber] = useState<string>();
     useEffect(() => {
@@ -18,11 +18,11 @@ const PostDetail: React.FC = () => {
     }, [id]);
   return (
     <div>
-      <h1>Chi Tiết Bài Viết {number}</h1>
-      <p>Đang hiển thị bài viết có ID: <strong>{id}</strong></p>
+      <h1>Post Detail {number}</h1>
+      <p>Displaying post with ID: <strong>{id}</strong></p>
       
       <hr className='w-full'/>
-      <Link to="/">← Quay lại danh sách</Link>
+      <Link to="/">← Back to list</Link>
     </div>
   );
 };

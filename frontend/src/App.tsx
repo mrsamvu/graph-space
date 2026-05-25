@@ -22,7 +22,7 @@ const App: React.FC = () => {
           <Route path="/" element={<Home />} />
           <Route path="/post/:id" element={<PostDetail />} />
           {/* Trang báo lỗi 404 */}
-          <Route path="*" element={<div>404 - Không tìm thấy trang</div>} />
+          <Route path="*" element={<div>404 - Page not found</div>} />
         </Routes>
       </main>
     </BrowserRouter>

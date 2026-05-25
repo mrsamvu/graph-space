@@ -9,3 +9,15 @@ export function FormatJSON(arg1) {
 export function SendRequest(arg1) {
   return window['go']['services']['CallAPIService']['SendRequest'](arg1);
 }
+
+export function StartSubscription(arg1) {
+  return window['go']['services']['CallAPIService']['StartSubscription'](arg1);
+}
+
+export function Startup(arg1) {
+  return window['go']['services']['CallAPIService']['Startup'](arg1);
+}
+
+export function StopSubscription(arg1) {
+  return window['go']['services']['CallAPIService']['StopSubscription'](arg1);
+}

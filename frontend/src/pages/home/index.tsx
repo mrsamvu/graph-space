@@ -5,7 +5,7 @@ import { BiCaretRight, BiCollection } from "react-icons/bi";
 import { RxFileText } from "react-icons/rx";
 import { CiCloudOn } from "react-icons/ci";
 import { Group, Panel, Separator } from "react-resizable-panels";
-import { ArrowRight, Check, ChevronDown, ChevronRight, Copy, Search } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, Clock, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Database, Download, Edit3, Pin, Plus, Search, Settings, Upload, X } from 'lucide-react';
 import { useDispatch, useSelector } from 'react-redux';
 import { setEndpoint } from './redux/slices/home.slice';
 import { RootState } from '@/redux/store';
@@ -42,14 +42,40 @@ import {
 } from "graphql";
 import { graphql as graphqlMode, updateSchema } from "cm6-graphql";
 import { EditorView, keymap, lineNumbers, drawSelection, rectangularSelection, crosshairCursor, Decoration, DecorationSet } from "@codemirror/view";
-import { SendRequest } from "../../../wailsjs/go/services/CallAPIService";
+import { SendRequest, StartSubscription, StopSubscription } from "../../../wailsjs/go/services/CallAPIService";
+import { EventsOn } from "../../../wailsjs/runtime/runtime";
+import {
+  DeleteCollection,
+  DeleteFolder,
+  ListSavedAPIs,
+  ListSavedCollections,
+  RenameCollection,
+  RenameFolder,
+  SaveCollection,
+  SaveFolder,
+  SaveSavedAPI,
+  MoveFolder,
+  DeleteSavedAPI,
+  CheckGoogleDriveSyncStatus,
+  GetCloudSyncState,
+  GetGoogleDriveConfig,
+  LoadEnvironmentStore,
+  OpenJSONFile,
+  PullWorkspacesFromGoogleDrive,
+  RenameSavedAPI,
+  RequestGoogleDriveAccess,
+  SaveEnvironmentStore,
+  SaveGoogleDriveConfig,
+  SaveJSONFile,
+  SyncAllWorkspacesToGoogleDrive,
+} from "../../../wailsjs/go/main/App";
 import { Checkbox } from '../../components/ui/checkbox';
 import { Field, FieldGroup, FieldLabel } from "../../components/ui/field";
 import { EditorState, Extension, Prec, RangeSetBuilder, StateField } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, foldGutter, foldKeymap, foldService, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language';
 import { renderToStaticMarkup } from "react-dom/server";
-import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { autocompletion, CompletionContext, completionKeymap, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { tags as t } from "@lezer/highlight";
 import { Diagnostic, linter, lintKeymap } from '@codemirror/lint';
 import { indentationMarkers } from "@replit/codemirror-indentation-markers";
@@ -92,11 +118,11 @@ type ExplorerField = {
   type: string;
 
   kind:
-    | "object"
-    | "scalar"
-    | "enum"
-    | "interface"
-    | "union";
+  | "object"
+  | "scalar"
+  | "enum"
+  | "interface"
+  | "union";
 
   nextTypeName?: string | null;
 
@@ -116,6 +142,161 @@ type ExplorerType = {
   fields: ExplorerField[];
 };
 
+type RequestConfigTab =
+  | "variables"
+  | "headers";
+
+type ResponsePanelTab =
+  | "body"
+  | "cookies"
+  | "headers";
+
+type ResponseCookieItem = {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: string;
+  httpOnly: boolean;
+  secure: boolean;
+};
+
+type WorkspaceTab = {
+  id: string;
+  title: string;
+  savedApiId?: string;
+  collection?: string;
+  folder?: string;
+  operation: string;
+  variables: string;
+  headers: string;
+  response: string;
+  requestConfigTab: RequestConfigTab;
+  responsePanelTab: ResponsePanelTab;
+  responseStatusCode?: number;
+  responseStatus?: string;
+  responseHeaders: Record<string, string>;
+  responseCookies: ResponseCookieItem[];
+  responseDuration?: number;
+  responseSize?: number;
+  subscriptionId?: string;
+  subscriptionListening?: boolean;
+  pinned?: boolean;
+  isDirty: boolean;
+};
+
+type SavedAPIItem = {
+  id: string;
+  name: string;
+  collection: string;
+  folder: string;
+  endpoint: string;
+  query: string;
+  variables: string;
+  headers: string;
+  updatedAt: number;
+};
+
+type SavedFolderItem = {
+  name: string;
+  folders: SavedFolderItem[];
+};
+
+type SavedCollectionItem = {
+  name: string;
+  folders: SavedFolderItem[];
+};
+
+type EnvironmentVariable = {
+  id: string;
+  key: string;
+  value: string;
+};
+
+type EnvironmentItem = {
+  id: string;
+  name: string;
+  variables: EnvironmentVariable[];
+};
+
+type EnvironmentStorePayload = {
+  activeEnvironmentId: string;
+  environments: EnvironmentItem[];
+};
+
+type AppToast = {
+  id: string;
+  type: "success" | "error";
+  message: string;
+};
+
+type CollectionExportPayload = {
+  type: "graph-space-collection";
+  version: 1;
+  collection: SavedCollectionItem;
+  apis: SavedAPIItem[];
+};
+
+type CloudSyncState = {
+  status: string;
+  message: string;
+  updatedAt: number;
+  localVersion: number;
+  cloudVersion: number;
+};
+
+type GoogleDriveConfigView = {
+  clientId: string;
+  clientSecretSet: boolean;
+  redirectPort: number;
+  lockTTLSecond: number;
+  accountEmail?: string;
+};
+
+type CollectionContextMenu =
+  | {
+    type: "collection";
+    collection: string;
+    x: number;
+    y: number;
+  }
+  | {
+    type: "folder";
+    collection: string;
+    folderPath: string;
+    name: string;
+    x: number;
+    y: number;
+  }
+  | {
+    type: "api";
+    api: SavedAPIItem;
+    x: number;
+    y: number;
+  };
+
+type TabContextMenu = {
+  tabId: string;
+  x: number;
+  y: number;
+};
+
+const createWorkspaceTab = (
+  index: number
+): WorkspaceTab => ({
+  id: `workspace-${Date.now()}-${index}`,
+  title: `Query ${index}`,
+  operation: "",
+  variables: "{}",
+  headers: "{}",
+  response: "",
+  requestConfigTab: "variables",
+  responsePanelTab: "body",
+  responseHeaders: {},
+  responseCookies: [],
+  isDirty: false,
+});
+
 const Home: React.FC = () => {
   const editorDomRef = useRef<HTMLDivElement>(null);
   const variablesDomRef = useRef<HTMLDivElement>(null);
@@ -133,10 +314,192 @@ const Home: React.FC = () => {
   const schemaRef = useRef<GraphQLSchema | null>(null);
   const [canRunOperation, setCanRunOperation] = useState(false);
   const [isRunningOperation, setIsRunningOperation] = useState(false);
-  const [requestConfigTab, setRequestConfigTab] = useState<"variables" | "headers">("variables");
   const [responseCopied, setResponseCopied] = useState(false);
+  const [sidebarMode, setSidebarMode] = useState<"documentation" | "collections" | "saved-api">("documentation");
+  const [savedAPIs, setSavedAPIs] = useState<SavedAPIItem[]>([]);
+  const [savedCollections, setSavedCollections] = useState<SavedCollectionItem[]>([]);
+  const [expandedCollections, setExpandedCollections] = useState<string[]>([]);
+  const [expandedFolders, setExpandedFolders] = useState<string[]>([]);
+  const [selectedSavedAPIId, setSelectedSavedAPIId] = useState<string | null>(null);
+  const [selectedCollectionTarget, setSelectedCollectionTarget] = useState({
+    collection: "Default",
+    folder: "",
+  });
+  const [savedAPIClipboard, setSavedAPIClipboard] = useState<{
+    apiId: string;
+    mode: "copy" | "cut";
+  } | null>(null);
+  const [collectionSearchKeyword, setCollectionSearchKeyword] = useState("");
+  const [activeSavedAPI, setActiveSavedAPI] = useState<SavedAPIItem | null>(null);
+  const [closeConfirmTabId, setCloseConfirmTabId] = useState<string | null>(null);
+  const [dragOverTarget, setDragOverTarget] = useState<{
+    collection: string;
+    path: string;
+    position: "before" | "inside" | "after";
+  } | null>(null);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [savePickerExpandedCollections, setSavePickerExpandedCollections] = useState<string[]>([]);
+  const [savePickerExpandedFolders, setSavePickerExpandedFolders] = useState<string[]>([]);
+  const [contextMenu, setContextMenu] = useState<CollectionContextMenu | null>(null);
+  const [tabContextMenu, setTabContextMenu] = useState<TabContextMenu | null>(null);
+  const [isRunButtonHovered, setIsRunButtonHovered] = useState(false);
+  const [appToasts, setAppToasts] = useState<AppToast[]>([]);
+  const [environmentStore, setEnvironmentStore] = useState<EnvironmentStorePayload>({
+    activeEnvironmentId: "",
+    environments: [],
+  });
+  const [environmentMenuOpen, setEnvironmentMenuOpen] = useState(false);
+  const [environmentEditorOpen, setEnvironmentEditorOpen] = useState(false);
+  const [environmentSearch, setEnvironmentSearch] = useState("");
+  const [editingEnvironmentId, setEditingEnvironmentId] = useState<string | null>(null);
+  const [cloudDialogOpen, setCloudDialogOpen] = useState(false);
+  const [cloudSyncState, setCloudSyncState] = useState<CloudSyncState>({
+    status: "idle",
+    message: "",
+    updatedAt: 0,
+    localVersion: 0,
+    cloudVersion: 0,
+  });
+  const [googleConfig, setGoogleConfig] = useState({
+    clientId: "",
+    clientSecret: "",
+    clientSecretSet: false,
+    accountEmail: "",
+  });
+  const [cloudSettingsOpen, setCloudSettingsOpen] = useState(false);
+  const [collectionDialog, setCollectionDialog] = useState({
+    open: false,
+    mode: "create" as "create" | "rename",
+    oldName: "",
+    name: "",
+  });
+  const [folderDialog, setFolderDialog] = useState({
+    open: false,
+    mode: "create" as "create" | "rename",
+    collection: "Default",
+    parentPath: "",
+    folderPath: "",
+    name: "",
+  });
+  const [apiDialog, setApiDialog] = useState({
+    open: false,
+    apiId: "",
+    name: "",
+  });
+  const [saveDialogDraft, setSaveDialogDraft] = useState({
+    name: "",
+    collection: "Default",
+    folder: "",
+  });
+  const [workTabs, setWorkTabs] = useState<WorkspaceTab[]>(() => [
+    createWorkspaceTab(1),
+  ]);
+  const [activeWorkTabId, setActiveWorkTabId] = useState(() =>
+    workTabs[0].id
+  );
+
+  const activeWorkTab =
+    workTabs.find(
+      (tab) =>
+        tab.id ===
+        activeWorkTabId
+    ) ?? workTabs[0] ?? null;
+
+  const activeEnvironment =
+    environmentStore.environments.find(
+      (environment) =>
+        environment.id ===
+        environmentStore.activeEnvironmentId
+    ) ?? null;
+
+  const editingEnvironment =
+    environmentStore.environments.find(
+      (environment) =>
+        environment.id ===
+        editingEnvironmentId
+    ) ?? null;
+
+  const environmentVariables =
+    activeEnvironment?.variables.filter(
+      (variable) =>
+        variable.key.trim()
+    ) ?? [];
+
+  const environmentVariablesRef =
+    useRef<EnvironmentVariable[]>([]);
+
+  const existingCollections =
+    savedCollections
+      .map((collection) => collection.name)
+      .sort((a, b) => a.localeCompare(b));
+
+  const existingFolders =
+    getFolderPathOptions(
+      savedCollections.find(
+        (collection) =>
+          collection.name ===
+          saveDialogDraft.collection
+      )?.folders ?? []
+    );
+
+  const updateWorkTab = useCallback(
+    (
+      tabId: string,
+      patch:
+        | Partial<WorkspaceTab>
+        | ((
+          tab: WorkspaceTab
+        ) => Partial<WorkspaceTab>)
+    ) => {
+      setWorkTabs((currentTabs) =>
+        currentTabs.map((tab) =>
+          tab.id === tabId
+            ? {
+              ...tab,
+              ...(typeof patch === "function"
+                ? patch(tab)
+                : patch),
+            }
+            : tab
+        )
+      );
+    },
+    []
+  );
+
+  useEffect(() => {
+    environmentVariablesRef.current =
+      environmentVariables;
+  }, [environmentVariables]);
+
+  function showToast(
+    type: AppToast["type"],
+    message: string
+  ) {
+    const id =
+      `${Date.now()}-${Math.random()}`;
+
+    setAppToasts((items) => [
+      ...items,
+      {
+        id,
+        type,
+        message,
+      },
+    ]);
+
+    window.setTimeout(() => {
+      setAppToasts((items) =>
+        items.filter(
+          (item) =>
+            item.id !== id
+        )
+      );
+    }, 3200);
+  }
 
   const scrollRef = useRef<any>(null);
+  const tabScrollRef = useRef<any>(null);
 
   const overlayScrollOptions = {
     scrollbars: {
@@ -147,20 +510,205 @@ const Home: React.FC = () => {
     },
   } as const;
 
+  const tabScrollOptions = {
+    scrollbars: {
+      theme: "os-theme-graph-space-tabs",
+      autoHide: "leave",
+      autoHideDelay: 120,
+      clickScroll: true,
+    },
+  } as const;
+
   const [rootOperations, setRootOperations] = useState<{
     query: boolean;
     mutation: boolean;
+    subscription: boolean;
   }>({
     query: false,
     mutation: false,
+    subscription: false,
   });
+
+  async function refreshSavedAPIs() {
+    try {
+      const [apis, collections] =
+        await Promise.all([
+          ListSavedAPIs(),
+          ListSavedCollections(),
+        ]);
+
+      setSavedAPIs(
+        (apis ?? []) as SavedAPIItem[]
+      );
+      setSavedCollections(
+        (collections ?? []) as SavedCollectionItem[]
+      );
+      GetCloudSyncState()
+        .then((state) =>
+          setCloudSyncState(
+            state as CloudSyncState
+          )
+        )
+        .catch(() => undefined);
+    } catch {
+      setSavedAPIs([]);
+      setSavedCollections([]);
+    }
+  }
+
+  const handleMoveFolder = async (
+    srcCol: string,
+    srcPath: string,
+    destCol: string,
+    destPath: string,
+    dropPosition: string
+  ) => {
+    try {
+      await MoveFolder({
+        srcCollection: srcCol,
+        srcPath: srcPath,
+        destCollection: destCol,
+        destPath: destPath,
+        dropPosition: dropPosition,
+      });
+      await refreshSavedAPIs();
+    } catch (err) {
+      console.error("Failed to move folder:", err);
+    }
+  };
+
+  useEffect(() => {
+    refreshSavedAPIs();
+  }, []);
+
+  async function refreshEnvironmentStore() {
+    try {
+      const store =
+        await LoadEnvironmentStore();
+
+      setEnvironmentStore({
+        activeEnvironmentId:
+          store.activeEnvironmentId || "",
+        environments:
+          (store.environments || []) as EnvironmentItem[],
+      });
+    } catch {
+      setEnvironmentStore({
+        activeEnvironmentId: "",
+        environments: [],
+      });
+    }
+  }
+
+  async function persistEnvironmentStore(
+    store: EnvironmentStorePayload
+  ) {
+    setEnvironmentStore(store);
+    await SaveEnvironmentStore(store as any);
+  }
+
+  async function refreshCloudState() {
+    try {
+      const state =
+        await CheckGoogleDriveSyncStatus();
+
+      setCloudSyncState(
+        state as CloudSyncState
+      );
+    } catch {
+      try {
+        const state =
+          await GetCloudSyncState();
+        setCloudSyncState(
+          state as CloudSyncState
+        );
+      } catch {
+        setCloudSyncState((state) => ({
+          ...state,
+          status:
+            "error",
+          message:
+            "Unable to check Google Drive sync status.",
+        }));
+      }
+    }
+  }
+
+  async function refreshGoogleConfig() {
+    try {
+      const config =
+        await GetGoogleDriveConfig();
+
+      setGoogleConfig({
+        clientId:
+          (config as GoogleDriveConfigView).clientId || "",
+        clientSecret:
+          "",
+        clientSecretSet:
+          (config as GoogleDriveConfigView).clientSecretSet || false,
+        accountEmail:
+          (config as GoogleDriveConfigView).accountEmail || "",
+      });
+    } catch {
+      setGoogleConfig({
+        clientId: "",
+        clientSecret: "",
+        clientSecretSet: false,
+        accountEmail: "",
+      });
+    }
+  }
+
+  useEffect(() => {
+    refreshEnvironmentStore();
+    refreshCloudState();
+    refreshGoogleConfig();
+  }, []);
+
+  useEffect(() => {
+    const closeMenu = () => {
+      setContextMenu(null);
+      setTabContextMenu(null);
+    };
+
+    window.addEventListener(
+      "click",
+      closeMenu
+    );
+
+    return () => {
+      window.removeEventListener(
+        "click",
+        closeMenu
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleWorkspaceChanged = () => {
+      refreshSavedAPIs();
+      refreshCloudState();
+    };
+
+    window.addEventListener(
+      "graph-space-workspace-changed",
+      handleWorkspaceChanged
+    );
+
+    return () => {
+      window.removeEventListener(
+        "graph-space-workspace-changed",
+        handleWorkspaceChanged
+      );
+    };
+  }, []);
 
   // Load schema
   async function loadSchema() {
     try {
       // Thay fetch() bằng Go bridge
       const res = await SendRequest({
-        url: lastEndpoint,
+        url: resolveEnvironmentText(lastEndpoint),
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: getIntrospectionQuery() }), // ✅ dùng hàm chuẩn của graphql-js
@@ -208,7 +756,7 @@ const Home: React.FC = () => {
       // Update cm6-graphql with real schema
       const graphQLEditor =
         editorViewRef.current[
-          "operation"
+        "operation"
         ];
 
       if (graphQLEditor) {
@@ -220,7 +768,7 @@ const Home: React.FC = () => {
 
       const operationView =
         editorViewRef.current[
-          "operation"
+        "operation"
         ];
 
       if (operationView) {
@@ -537,6 +1085,11 @@ const Home: React.FC = () => {
       ".cm-selectionMatch-main": {
         backgroundColor: "#facc1535",
       },
+      ".cm-env-variable": {
+        color: "#f59e0b",
+        backgroundColor: "#f59e0b20",
+        borderRadius: "3px",
+      },
       ".cm-panels": {
         backgroundColor: "#161b22",
         borderBottom: "1px solid #2d3748",
@@ -795,7 +1348,7 @@ const Home: React.FC = () => {
             const end =
               Math.min(
                 pos +
-                  (err.message.match(/\"([^\"]+)\"/)?.[1]?.length ?? 5),
+                (err.message.match(/\"([^\"]+)\"/)?.[1]?.length ?? 5),
                 offset + source.length
               );
 
@@ -896,6 +1449,95 @@ const Home: React.FC = () => {
   const jsonLiteralDecoration =
     Decoration.mark({
       class: "cm-json-literal",
+    });
+
+  const environmentVariableDecoration =
+    Decoration.mark({
+      class: "cm-env-variable",
+    });
+
+  function environmentCompletionSource(
+    context: CompletionContext
+  ) {
+    const before =
+      context.matchBefore(
+        /\{\{[A-Za-z0-9_:-]*$/
+      );
+
+    if (!before) {
+      return null;
+    }
+
+    return {
+      from:
+        before.from + 2,
+      options:
+        environmentVariablesRef.current.map(
+          (variable) => ({
+            label:
+              variable.key,
+            type:
+              "variable",
+            detail:
+              variable.value,
+            apply:
+              `${variable.key}}}`,
+          })
+        ),
+    };
+  }
+
+  function buildEnvironmentDecorations(
+    state: EditorState
+  ) {
+    const builder =
+      new RangeSetBuilder<Decoration>();
+
+    const doc =
+      state.doc.toString();
+
+    const tokenRegex =
+      /\{\{[A-Za-z0-9_:-]+\}\}/g;
+
+    let match:
+      | RegExpExecArray
+      | null;
+
+    while (
+      (match = tokenRegex.exec(doc))
+    ) {
+      builder.add(
+        match.index,
+        match.index + match[0].length,
+        environmentVariableDecoration
+      );
+    }
+
+    return builder.finish();
+  }
+
+  const environmentHighlightField =
+    StateField.define<DecorationSet>({
+      create(state) {
+        return buildEnvironmentDecorations(
+          state
+        );
+      },
+      update(deco, tr) {
+        if (tr.docChanged) {
+          return buildEnvironmentDecorations(
+            tr.state
+          );
+        }
+
+        return deco.map(
+          tr.changes
+        );
+      },
+      provide: (field) =>
+        EditorView.decorations.from(
+          field
+        ),
     });
 
   function buildJsonDecorations(
@@ -1116,10 +1758,14 @@ const Home: React.FC = () => {
 
   // ── Init editor ────────────────────────────────────────────────────
   useEffect(() => {
-    if (!editorDomRef.current) return;
+    if (!editorDomRef.current || !activeWorkTab) return;
+
+    const mountedTabId =
+      activeWorkTabId;
 
     const startState = EditorState.create({
-      // doc: "# Tải schema và click vào field để bắt đầu\n# Hoặc tự gõ query của bạn ở đây\n",
+      doc:
+        activeWorkTab.operation,
       extensions: [
         history(),
         lineNumbers(),
@@ -1184,7 +1830,23 @@ const Home: React.FC = () => {
           ])
         ),
         inactiveOperationField,
+        environmentHighlightField,
         createOperationListener(),
+        EditorView.updateListener.of((update) => {
+          if (!update.docChanged) {
+            return;
+          }
+
+          updateWorkTab(
+            mountedTabId,
+            {
+              operation:
+                update.state.doc.toString(),
+              isDirty:
+                true,
+            }
+          );
+        }),
         createScrollNormalizer(),
         drawSelection(),
         rectangularSelection(),
@@ -1226,6 +1888,18 @@ const Home: React.FC = () => {
     view.scrollDOM.style.overflowX = "auto";
 
     editorViewRef.current["operation"] = view;
+
+    if (schemaRef.current) {
+      updateSchema(
+        view,
+        schemaRef.current
+      );
+    }
+
+    syncExplorerCheckboxState(
+      view
+    );
+
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         closeSearchPanel(view);
@@ -1236,18 +1910,25 @@ const Home: React.FC = () => {
 
     return () => {
       view.destroy();
+      delete editorViewRef.current[
+        "operation"
+      ];
       document.removeEventListener("keydown", handleEsc);
     };
-  }, [buildLinter]);
+  }, [activeWorkTabId, buildLinter, updateWorkTab]);
 
   useEffect(() => {
     if (
+      !activeWorkTab ||
       !variablesDomRef.current ||
       !headersDomRef.current ||
       !resultDomRef.current
     ) {
       return;
     }
+
+    const mountedTabId =
+      activeWorkTabId;
 
     const commonExtensions = [
       lineNumbers(),
@@ -1261,7 +1942,13 @@ const Home: React.FC = () => {
       indentOnInput(),
       jsonFoldExtension,
       jsonHighlightField,
+      environmentHighlightField,
       gqlDarkTheme,
+      autocompletion({
+        override: [
+          environmentCompletionSource,
+        ],
+      }),
       keymap.of([
         ...defaultKeymap,
         ...historyKeymap,
@@ -1274,8 +1961,26 @@ const Home: React.FC = () => {
     const variablesView =
       new EditorView({
         state: EditorState.create({
-          doc: "{}",
-          extensions: commonExtensions,
+          doc:
+            activeWorkTab.variables,
+          extensions: [
+            ...commonExtensions,
+            EditorView.updateListener.of((update) => {
+              if (!update.docChanged) {
+                return;
+              }
+
+              updateWorkTab(
+                mountedTabId,
+                {
+                  variables:
+                    update.state.doc.toString(),
+                  isDirty:
+                    true,
+                }
+              );
+            }),
+          ],
         }),
         parent:
           variablesDomRef.current,
@@ -1284,8 +1989,26 @@ const Home: React.FC = () => {
     const headersView =
       new EditorView({
         state: EditorState.create({
-          doc: "{}",
-          extensions: commonExtensions,
+          doc:
+            activeWorkTab.headers,
+          extensions: [
+            ...commonExtensions,
+            EditorView.updateListener.of((update) => {
+              if (!update.docChanged) {
+                return;
+              }
+
+              updateWorkTab(
+                mountedTabId,
+                {
+                  headers:
+                    update.state.doc.toString(),
+                  isDirty:
+                    true,
+                }
+              );
+            }),
+          ],
         }),
         parent:
           headersDomRef.current,
@@ -1294,13 +2017,8 @@ const Home: React.FC = () => {
     const resultView =
       new EditorView({
         state: EditorState.create({
-          doc: JSON.stringify(
-            {
-              data: null,
-            },
-            null,
-            2
-          ),
+          doc:
+            activeWorkTab.response,
           extensions: [
             ...commonExtensions,
             EditorState.readOnly.of(true),
@@ -1347,7 +2065,7 @@ const Home: React.FC = () => {
         "result"
       ];
     };
-  }, []);
+  }, [activeWorkTabId, updateWorkTab]);
 
   // detect vị trí con trỏ để xem đang trong query hay mutation
   function cursorInOperationRange(
@@ -1367,6 +2085,7 @@ const Home: React.FC = () => {
     return {
       query: /^[ \t]*query\b/m.test(doc),
       mutation: /^[ \t]*mutation\b/m.test(doc),
+      subscription: /^[ \t]*subscription\b/m.test(doc),
     };
   }
 
@@ -1536,6 +2255,43 @@ const Home: React.FC = () => {
     return null;
   }
 
+  function syncExplorerCheckboxState(
+    view: EditorView
+  ) {
+    const operation =
+      getOperationAtCursor(
+        view
+      );
+
+    setCanRunOperation(
+      operationCanRun(view)
+    );
+
+    const docOperations =
+      getRootOperations(
+        view
+      );
+
+    if (operation) {
+      setRootOperations({
+        query:
+          operation.type ===
+          "query",
+        mutation:
+          operation.type ===
+          "mutation",
+        subscription:
+          operation.type ===
+          "subscription",
+      });
+      return;
+    }
+
+    setRootOperations(
+      docOperations
+    );
+  }
+
   function createOperationListener() {
     return EditorView.updateListener.of((update) => {
       if (
@@ -1545,29 +2301,9 @@ const Home: React.FC = () => {
         return;
       }
 
-      const operation = getOperationAtCursor(
+      syncExplorerCheckboxState(
         update.view
       );
-      setCanRunOperation(
-        operationCanRun(update.view)
-      );
-
-      const docOperations = getRootOperations(update.view);
-
-      if (operation) {
-        // cursor đang nằm trong operation
-        setRootOperations({
-          query:
-            operation.type === "query",
-
-          mutation:
-            operation.type === "mutation",
-        });
-      } else {
-        // cursor không nằm trong operation
-        // fallback sang trạng thái document
-        setRootOperations(docOperations);
-      }
     });
   }
 
@@ -1585,7 +2321,7 @@ const Home: React.FC = () => {
           Math.max(
             0,
             scroller.scrollHeight -
-              scroller.clientHeight
+            scroller.clientHeight
           );
 
         if (
@@ -1608,7 +2344,7 @@ const Home: React.FC = () => {
   }
 
   // xử lý khi click check box root operator
-  function setRootOperation(type: "query" | "mutation", checked: boolean) {
+  function setRootOperation(type: "query" | "mutation" | "subscription", checked: boolean) {
     const view = editorViewRef.current["operation"];
 
     if (!view) { return; };
@@ -1739,7 +2475,9 @@ const Home: React.FC = () => {
     const template =
       type === "query"
         ? `query {\n  \n}`
-        : `mutation {\n  \n}`;
+        : type === "mutation"
+          ? `mutation {\n  \n}`
+          : `subscription {\n  \n}`;
 
     const needsSpacing =
       doc.trim().length > 0;
@@ -1802,9 +2540,9 @@ const Home: React.FC = () => {
     return current;
   }
 
-// ======================================================
-// BUILD EXPLORER SCHEMA
-// ======================================================
+  // ======================================================
+  // BUILD EXPLORER SCHEMA
+  // ======================================================
 
   function buildExplorerSchema(schema: any) {
     const typeMap = schema.getTypeMap();
@@ -1928,15 +2666,15 @@ const Home: React.FC = () => {
       fieldName?: string;
     }[]
   >([{
-      typeName: null,
-      fieldName: "Root",
-    }
+    typeName: null,
+    fieldName: "Root",
+  }
   ]);
 
   const type =
     currentType
       ? explorerSchema[
-        currentType
+      currentType
       ]
       : null;
 
@@ -2001,7 +2739,8 @@ const Home: React.FC = () => {
   ) {
     const isRootOperation =
       currentType === "Query" ||
-      currentType === "Mutation";
+      currentType === "Mutation" ||
+      currentType === "Subscription";
 
     if (isRootOperation) {
       setSelectedField(field);
@@ -2041,7 +2780,7 @@ const Home: React.FC = () => {
   }
 
   function openRootOperationFromSearch(
-    operationType: "Query" | "Mutation",
+    operationType: "Query" | "Mutation" | "Subscription",
     field: ExplorerField
   ) {
     const expandable =
@@ -2206,7 +2945,7 @@ const Home: React.FC = () => {
   }
 
   function getDocumentationSearchResults(
-    operationType: "Query" | "Mutation"
+    operationType: "Query" | "Mutation" | "Subscription"
   ) {
     const fields =
       explorerSchema[
@@ -2417,7 +3156,7 @@ const Home: React.FC = () => {
     targetPath: string[],
     fieldToInsert: string
   ): string {
-   const withBraces = ensureSelectionSet(queryString, targetPath);
+    const withBraces = ensureSelectionSet(queryString, targetPath);
 
     const range =
       findSelectionSetRangeForPath(
@@ -2491,7 +3230,7 @@ const Home: React.FC = () => {
 
   function formatQueryPreservingOperationKeyword(
     queryString: string,
-    operationType?: "query" | "mutation"
+    operationType?: "query" | "mutation" | "subscription"
   ): string {
     const looseFormatted =
       formatGraphQLLoose(
@@ -2989,7 +3728,7 @@ const Home: React.FC = () => {
         query.indexOf(
           "{",
           match.index +
-            match[0].length
+          match[0].length
         );
 
       if (openBrace === -1) {
@@ -3009,9 +3748,9 @@ const Home: React.FC = () => {
       ranges.push({
         type:
           match[1] as
-            | "query"
-            | "mutation"
-            | "subscription",
+          | "query"
+          | "mutation"
+          | "subscription",
         start:
           match.index,
         end:
@@ -3041,130 +3780,132 @@ const Home: React.FC = () => {
   }
 
   function getCurrentOperationByCursor(
-  query: string,
-  cursorPos: number
-): {
-  operation: OperationDefinitionNode | null;
-  operationType: "query" | "mutation" | null;
-  operationStart: number;
-  operationEnd: number;
-} {
+    query: string,
+    cursorPos: number
+  ): {
+    operation: OperationDefinitionNode | null;
+    operationType: "query" | "mutation" | null;
+    operationStart: number;
+    operationEnd: number;
+  } {
 
-  const textRange =
-    getOperationRangesFromText(
-      query
-    ).find(
-      (range) =>
-        cursorInOperationRange(
-          cursorPos,
-          range.start,
-          range.end
-        )
-    );
-
-  if (textRange) {
-    return {
-      operation: null,
-      operationType:
-        textRange.type ===
-        "subscription"
-          ? null
-          : textRange.type,
-      operationStart:
-        textRange.start,
-      operationEnd:
-        textRange.end,
-    };
-  }
-
-  try {
-
-    // parse bằng normalized
-    const normalized =
-      query.replace(
-        /\{\s*\}/gs,
-        "{ __typename }"
+    const textRange =
+      getOperationRangesFromText(
+        query
+      ).find(
+        (range) =>
+          cursorInOperationRange(
+            cursorPos,
+            range.start,
+            range.end
+          )
       );
 
-    const ast = parse(
-      normalized,
-      {
-        noLocation: false,
-      }
-    );
+    if (textRange) {
+      return {
+        operation: null,
+        operationType:
+          textRange.type ===
+            "subscription"
+            ? null
+            : textRange.type,
+        operationStart:
+          textRange.start,
+        operationEnd:
+          textRange.end,
+      };
+    }
 
-    for (const def of ast.definitions) {
+    try {
 
-      if (
-        def.kind !==
-        Kind.OPERATION_DEFINITION
-      ) {
-        continue;
-      }
+      // parse bằng normalized
+      const normalized =
+        query.replace(
+          /\{\s*\}/gs,
+          "{ __typename }"
+        );
 
-      const start =
-        def.loc?.start ?? 0;
+      const ast = parse(
+        normalized,
+        {
+          noLocation: false,
+        }
+      );
 
-      const end =
-        def.loc?.end ?? 0;
+      for (const def of ast.definitions) {
 
-      if (
-        cursorInOperationRange(
-          cursorPos,
-          start,
-          end
-        )
-      ) {
+        if (
+          def.kind !==
+          Kind.OPERATION_DEFINITION
+        ) {
+          continue;
+        }
 
-        return {
-          operation: def,
+        const start =
+          def.loc?.start ?? 0;
 
-          operationType:
-            def.operation as
+        const end =
+          def.loc?.end ?? 0;
+
+        if (
+          cursorInOperationRange(
+            cursorPos,
+            start,
+            end
+          )
+        ) {
+
+          return {
+            operation: def,
+
+            operationType:
+              def.operation as
               | "query"
               | "mutation",
 
-          operationStart:
-            start,
+            operationStart:
+              start,
 
-          operationEnd:
-            end,
-        };
+            operationEnd:
+              end,
+          };
+        }
       }
+
+    } catch (e) {
+
+      console.error(
+        "getCurrentOperationByCursor",
+        e
+      );
     }
 
-  } catch (e) {
-
-    console.error(
-      "getCurrentOperationByCursor",
-      e
-    );
+    return {
+      operation: null,
+      operationType: null,
+      operationStart: 0,
+      operationEnd: 0,
+    };
   }
-
-  return {
-    operation: null,
-    operationType: null,
-    operationStart: 0,
-    operationEnd: 0,
-  };
-}
 
   function getRootOperationType(
     schema: GraphQLSchema,
     rootFieldName: string
-  ): "query" | "mutation" | null {
+  ): "query" | "mutation" | "subscription" | null {
 
     const queryType =
       schema.getQueryType();
 
     const mutationType =
       schema.getMutationType();
+    const subscriptionType =
+      schema.getSubscriptionType();
 
     if (
       queryType
         ?.getFields?.()[
-          rootFieldName
-        ]
+      rootFieldName
+      ]
     ) {
       return "query";
     }
@@ -3172,10 +3913,19 @@ const Home: React.FC = () => {
     if (
       mutationType
         ?.getFields?.()[
-          rootFieldName
-        ]
+      rootFieldName
+      ]
     ) {
       return "mutation";
+    }
+
+    if (
+      subscriptionType
+        ?.getFields?.()[
+      rootFieldName
+      ]
+    ) {
+      return "subscription";
     }
 
     return null;
@@ -3188,14 +3938,24 @@ const Home: React.FC = () => {
     const queryField =
       schema.getQueryType()
         ?.getFields?.()[
-        rootFieldName
+      rootFieldName
       ];
 
     if (queryField) {
       return queryField;
     }
 
-    return schema.getMutationType()
+    const mutationField =
+      schema.getMutationType()
+      ?.getFields?.()[
+      rootFieldName
+    ];
+
+    if (mutationField) {
+      return mutationField;
+    }
+
+    return schema.getSubscriptionType()
       ?.getFields?.()[
       rootFieldName
     ] ?? null;
@@ -3472,7 +4232,7 @@ const Home: React.FC = () => {
 
   function getOperationRangeForType(
     query: string,
-    operationType: "query" | "mutation",
+    operationType: "query" | "mutation" | "subscription",
     cursorPos: number
   ) {
     const ranges =
@@ -3643,10 +4403,10 @@ const Home: React.FC = () => {
     cursorPos: number
   ) {
     const textRange =
-    getOperationRangesFromText(
-      query
-    ).find(
-      (range) =>
+      getOperationRangesFromText(
+        query
+      ).find(
+        (range) =>
           cursorInOperationRange(
             cursorPos,
             range.start,
@@ -3681,7 +4441,7 @@ const Home: React.FC = () => {
   function getActiveOperationText() {
     const view =
       editorViewRef.current[
-        "operation"
+      "operation"
       ];
 
     if (!view) {
@@ -3728,9 +4488,38 @@ const Home: React.FC = () => {
     editorId: string,
     text: string
   ) {
+    const tabFieldByEditorId:
+      Record<
+        string,
+        keyof Pick<
+          WorkspaceTab,
+          "operation" | "variables" | "headers" | "response"
+        >
+      > = {
+      operation: "operation",
+      variables: "variables",
+      headers: "headers",
+      result: "response",
+    };
+
+    const tabField =
+      tabFieldByEditorId[
+      editorId
+      ];
+
+    if (tabField) {
+      updateWorkTab(
+        activeWorkTabId,
+        {
+          [tabField]:
+            text,
+        } as Partial<WorkspaceTab>
+      );
+    }
+
     const view =
       editorViewRef.current[
-        editorId
+      editorId
       ];
 
     if (!view) {
@@ -3744,6 +4533,139 @@ const Home: React.FC = () => {
         insert: text,
       },
     });
+  }
+
+  function formatResponseBody(
+    body: string
+  ) {
+    if (!body) {
+      return "";
+    }
+
+    try {
+      return JSON.stringify(
+        JSON.parse(body),
+        null,
+        2
+      );
+    } catch {
+      return body;
+    }
+  }
+
+  function formatResponseDuration(
+    duration?: number
+  ) {
+    if (duration === undefined || duration === null || duration < 0) {
+      return "";
+    }
+
+    if (duration < 1000) {
+      return `${Math.round(duration)} ms`;
+    }
+
+    return `${(duration / 1000).toFixed(2)} s`;
+  }
+
+  function formatResponseSize(
+    size?: number
+  ) {
+    if (size === undefined || size === null || size < 0) {
+      return "";
+    }
+
+    if (size < 1024) {
+      return `${size} B`;
+    }
+
+    if (size < 1024 * 1024) {
+      return `${(size / 1024).toFixed(1)} KB`;
+    }
+
+    return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  function formatResponseStatus(
+    statusCode?: number,
+    status?: string
+  ) {
+    const statusText =
+      status?.trim() ?? "";
+
+    if (!statusCode) {
+      return statusText;
+    }
+
+    if (
+      statusText === String(statusCode) ||
+      statusText.startsWith(`${statusCode} `)
+    ) {
+      return statusText;
+    }
+
+    return `${statusCode} ${statusText}`.trim();
+  }
+
+  function resolveEnvironmentText(
+    text: string
+  ) {
+    return text.replace(
+      /\{\{([A-Za-z0-9_:-]+)\}\}/g,
+      (_match, key) =>
+        environmentVariablesRef.current.find(
+          (variable) =>
+            variable.key === key
+        )?.value ?? ""
+    );
+  }
+
+  function resolveEnvironmentValue<T>(
+    value: T
+  ): T {
+    if (typeof value === "string") {
+      return resolveEnvironmentText(
+        value
+      ) as T;
+    }
+
+    if (Array.isArray(value)) {
+      return value.map(
+        (item) =>
+          resolveEnvironmentValue(item)
+      ) as T;
+    }
+
+    if (
+      value &&
+      typeof value === "object"
+    ) {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(
+          ([key, item]) => [
+            key,
+            resolveEnvironmentValue(item),
+          ]
+        )
+      ) as T;
+    }
+
+    return value;
+  }
+
+  function setActiveResponsePanelTab(
+    tab: ResponsePanelTab
+  ) {
+    if (!activeWorkTab) {
+      return;
+    }
+
+    updateWorkTab(
+      activeWorkTab.id,
+      {
+        responsePanelTab:
+          tab,
+      }
+    );
   }
 
   function readVariablesEditor() {
@@ -4029,9 +4951,9 @@ const Home: React.FC = () => {
           def.selectionSet.selections.find(
             (selection): selection is FieldNode =>
               selection.kind ===
-                Kind.FIELD &&
+              Kind.FIELD &&
               selection.name.value ===
-                rootFieldName
+              rootFieldName
           );
 
         const argumentNode =
@@ -4094,11 +5016,7 @@ const Home: React.FC = () => {
             Kind.OPERATION_DEFINITION
         );
 
-      if (
-        !operation ||
-        operation.operation ===
-          "subscription"
-      ) {
+      if (!operation) {
         return false;
       }
 
@@ -4112,9 +5030,29 @@ const Home: React.FC = () => {
   }
 
   async function runActiveOperation() {
+    if (
+      activeWorkTab?.subscriptionListening &&
+      activeWorkTab.subscriptionId
+    ) {
+      await StopSubscription(
+        activeWorkTab.subscriptionId
+      );
+      updateWorkTab(
+        activeWorkTab.id,
+        {
+          subscriptionListening:
+            false,
+          subscriptionId:
+            undefined,
+        }
+      );
+      setIsRunButtonHovered(false);
+      return;
+    }
+
     const view =
       editorViewRef.current[
-        "operation"
+      "operation"
       ];
 
     if (
@@ -4131,6 +5069,10 @@ const Home: React.FC = () => {
     if (!active) {
       return;
     }
+
+    const isSubscription =
+      active.type ===
+      "subscription";
 
     let variables:
       | Record<string, unknown>
@@ -4162,36 +5104,113 @@ const Home: React.FC = () => {
       return;
     }
 
+    const previousResponseText =
+      getEditorText("result");
+    const previousScrollTop =
+      editorViewRef.current[
+        "result"
+      ]?.scrollDOM.scrollTop ?? 0;
+
     setIsRunningOperation(true);
-    setEditorText(
-      "result",
-      JSON.stringify(
-        {
-          loading: true,
-        },
-        null,
-        2
-      )
-    );
+
+    if (isSubscription && activeWorkTab) {
+      const subscriptionId =
+        `${activeWorkTab.id}-${Date.now()}`;
+
+      try {
+        await StartSubscription({
+          id:
+            subscriptionId,
+          url:
+            resolveEnvironmentText(lastEndpoint),
+          headers: {
+            ...resolveEnvironmentValue(requestHeaders),
+            "Content-Type": "application/json",
+          },
+          query:
+            active.text,
+          variables:
+            resolveEnvironmentValue(variables),
+        } as any);
+
+        updateWorkTab(
+          activeWorkTab.id,
+          {
+            subscriptionId,
+            subscriptionListening:
+              true,
+            response:
+              "",
+            responsePanelTab:
+              "body",
+            responseStatus:
+              "Listening",
+            responseStatusCode:
+              undefined,
+            responseHeaders:
+              {},
+            responseCookies:
+              [],
+            responseDuration:
+              undefined,
+            responseSize:
+              undefined,
+          }
+        );
+        setEditorText("result", "");
+      } catch (error: any) {
+        const nextText =
+          JSON.stringify(
+            {
+              errors: [
+                {
+                  message:
+                    error?.message ||
+                    String(error),
+                },
+              ],
+            },
+            null,
+            2
+          );
+        updateWorkTab(
+          activeWorkTab.id,
+          {
+            response:
+              nextText,
+          }
+        );
+        setEditorText(
+          "result",
+          nextText
+        );
+      } finally {
+        setIsRunningOperation(false);
+        setCanRunOperation(
+          operationCanRun(view)
+        );
+      }
+      return;
+    }
 
     try {
       const res =
         await SendRequest({
-          url: lastEndpoint,
+          url: resolveEnvironmentText(lastEndpoint),
           method: "POST",
           headers: {
-            ...requestHeaders,
+            ...resolveEnvironmentValue(requestHeaders),
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
             query: active.text,
-            variables,
+            variables:
+              resolveEnvironmentValue(variables),
           }),
         });
 
       if (res.error) {
-        setEditorText(
-          "result",
+        const nextText =
           JSON.stringify(
             {
               errors: [
@@ -4202,26 +5221,78 @@ const Home: React.FC = () => {
             },
             null,
             2
-          )
+          );
+        updateWorkTab(
+          activeWorkTabId,
+          {
+            response:
+              nextText,
+            responseStatus:
+              res.status,
+            responseStatusCode:
+              res.statusCode,
+            responseHeaders:
+              res.headers || {},
+            responseCookies:
+              res.cookies || [],
+            responseDuration:
+              res.duration,
+            responseSize:
+              res.size,
+          }
+        );
+        setEditorText(
+          "result",
+          nextText
         );
         return;
       }
 
-      try {
-        setEditorText(
-          "result",
-          JSON.stringify(
-            JSON.parse(res.body),
-            null,
-            2
-          )
-        );
-      } catch {
-        setEditorText(
-          "result",
+      const nextText =
+        formatResponseBody(
           res.body
         );
-      }
+
+      updateWorkTab(
+        activeWorkTabId,
+        {
+          response:
+            nextText,
+          responseStatus:
+            res.status,
+          responseStatusCode:
+            res.statusCode,
+          responseHeaders:
+            res.headers || {},
+          responseCookies:
+            res.cookies || [],
+          responseDuration:
+            res.duration,
+          responseSize:
+            res.size,
+        }
+      );
+
+      setEditorText(
+        "result",
+        nextText
+      );
+
+      requestAnimationFrame(() => {
+        const resultView =
+          editorViewRef.current[
+            "result"
+          ];
+
+        if (!resultView) {
+          return;
+        }
+
+        resultView.scrollDOM.scrollTop =
+          nextText === previousResponseText
+            ? previousScrollTop
+            : 0;
+      });
     } finally {
       setIsRunningOperation(false);
       setCanRunOperation(
@@ -4229,6 +5300,65 @@ const Home: React.FC = () => {
       );
     }
   }
+
+  useEffect(() => {
+    const unsubscribe =
+      EventsOn(
+        "graphql-subscription-event",
+        (event: any) => {
+          const subscriptionId =
+            event?.id;
+
+          if (!subscriptionId) {
+            return;
+          }
+
+          const nextText =
+            JSON.stringify(
+              event?.payload ?? event,
+              null,
+              2
+            );
+
+          setWorkTabs((currentTabs) =>
+            currentTabs.map((tab) =>
+              tab.subscriptionId === subscriptionId
+                ? {
+                  ...tab,
+                  response:
+                    nextText,
+                  responsePanelTab:
+                    "body",
+                  responseSize:
+                    nextText.length,
+                }
+                : tab
+            )
+          );
+
+          const activeTab =
+            workTabs.find(
+              (tab) =>
+                tab.id ===
+                activeWorkTabId
+            );
+
+          if (
+            activeTab?.subscriptionId ===
+            subscriptionId
+          ) {
+            setEditorText(
+              "result",
+              nextText
+            );
+          }
+        }
+      );
+
+    return () => {
+      unsubscribe();
+    };
+  }, [activeWorkTabId, workTabs]);
 
   function selectionExistsInActiveOperation(
     rootFieldName: string,
@@ -4253,7 +5383,7 @@ const Home: React.FC = () => {
     if (
       fieldOperationType &&
       active.type !==
-        fieldOperationType
+      fieldOperationType
     ) {
       return false;
     }
@@ -4292,9 +5422,9 @@ const Home: React.FC = () => {
           def.selectionSet.selections.find(
             (selection): selection is FieldNode =>
               selection.kind ===
-                Kind.FIELD &&
+              Kind.FIELD &&
               selection.name.value ===
-                rootFieldName
+              rootFieldName
           );
 
         return !!rootField?.arguments?.some(
@@ -4332,7 +5462,7 @@ const Home: React.FC = () => {
     if (
       fieldOperationType &&
       active.type !==
-        fieldOperationType
+      fieldOperationType
     ) {
       return false;
     }
@@ -4365,7 +5495,7 @@ const Home: React.FC = () => {
     rootFieldName: string,
     argName: string,
     checked: boolean,
-    operationType: "query" | "mutation"
+    operationType: "query" | "mutation" | "subscription"
   ) {
     const rootField =
       getRootFieldDefinition(
@@ -4413,7 +5543,7 @@ const Home: React.FC = () => {
           if (
             updated ||
             node.operation !==
-              operationType
+            operationType
           ) {
             return node;
           }
@@ -4440,9 +5570,9 @@ const Home: React.FC = () => {
               (selection) => {
                 if (
                   selection.kind !==
-                    Kind.FIELD ||
+                  Kind.FIELD ||
                   selection.name.value !==
-                    rootFieldName
+                  rootFieldName
                 ) {
                   return selection;
                 }
@@ -4805,145 +5935,432 @@ const Home: React.FC = () => {
   }
 
   function ensureRootFieldInOperation(
-  query: string,
-  rootFieldName: string,
-  schema: GraphQLSchema
-): string {
-  const rootRange =
-    getRootSelectionSetRange(
-      query
-    );
+    query: string,
+    rootFieldName: string,
+    schema: GraphQLSchema
+  ): string {
+    const rootRange =
+      getRootSelectionSetRange(
+        query
+      );
 
-  if (!rootRange) {
-    return query;
-  }
+    if (!rootRange) {
+      return query;
+    }
 
-  if (
-    fieldExistsInSelectionSet(
+    if (
+      fieldExistsInSelectionSet(
+        query,
+        rootRange.open,
+        rootRange.close,
+        rootFieldName
+      )
+    ) {
+      return query;
+    }
+
+    const rootFieldLine =
+      buildRootFieldLine(
+        rootFieldName,
+        schema
+      );
+
+    if (!rootFieldLine) {
+      return query;
+    }
+
+    return insertFieldAtPath(
       query,
-      rootRange.open,
-      rootRange.close,
-      rootFieldName
-    )
-  ) {
-    return query;
-  }
-
-  const rootFieldLine =
-    buildRootFieldLine(
-      rootFieldName,
-      schema
+      [],
+      rootFieldLine
     );
-
-  if (!rootFieldLine) {
-    return query;
   }
-
-  return insertFieldAtPath(
-    query,
-    [],
-    rootFieldLine
-  );
-}
 
   function handleFieldClick(
-  rootFieldName: string,
-  targetPath: string[],
-  field: ExplorerField,
-  checked: boolean
-) {
+    rootFieldName: string,
+    targetPath: string[],
+    field: ExplorerField,
+    checked: boolean
+  ) {
 
-  const view =
-    editorViewRef.current[
+    const view =
+      editorViewRef.current[
       "operation"
-    ];
+      ];
 
-  if (!view) {
-    return;
-  }
-
-  const schema =
-    schemaRef.current;
-
-  if (!schema) {
-    return;
-  }
-
-  const fullQuery =
-    view.state.doc.toString();
-
-  const cursorPos =
-    view.state.selection.main.head;
-
-  const currentOperation =
-    getCurrentOperationByCursor(
-      fullQuery,
-      cursorPos
-    );
-
-  const fieldOperationType =
-    getRootOperationType(
-      schema,
-      rootFieldName
-    );
-
-  if (!fieldOperationType) {
-    return;
-  }
-
-  const isRootFieldClick =
-    targetPath.length === 0 &&
-    field.name === rootFieldName;
-
-  const rootFieldDefinition =
-    getRootFieldDefinition(
-      schema,
-      rootFieldName
-    );
-
-  const requiredRootArgs =
-    rootFieldDefinition
-      ? getRequiredArguments(
-        rootFieldDefinition
-      ) as GraphQLArgument[]
-      : [];
-
-  const operationRange =
-    getOperationRangeForType(
-      fullQuery,
-      fieldOperationType,
-      cursorPos
-    );
-
-  if (!checked) {
-    if (!operationRange) {
+    if (!view) {
       return;
     }
 
-    const operationText =
+    const schema =
+      schemaRef.current;
+
+    if (!schema) {
+      return;
+    }
+
+    const fullQuery =
+      view.state.doc.toString();
+
+    const cursorPos =
+      view.state.selection.main.head;
+
+    const currentOperation =
+      getCurrentOperationByCursor(
+        fullQuery,
+        cursorPos
+      );
+
+    const fieldOperationType =
+      getRootOperationType(
+        schema,
+        rootFieldName
+      );
+
+    if (!fieldOperationType) {
+      return;
+    }
+
+    const isRootFieldClick =
+      targetPath.length === 0 &&
+      field.name === rootFieldName;
+
+    const rootFieldDefinition =
+      getRootFieldDefinition(
+        schema,
+        rootFieldName
+      );
+
+    const requiredRootArgs =
+      rootFieldDefinition
+        ? getRequiredArguments(
+          rootFieldDefinition
+        ) as GraphQLArgument[]
+        : [];
+
+    const operationRange =
+      getOperationRangeForType(
+        fullQuery,
+        fieldOperationType,
+        cursorPos
+      );
+
+    if (!checked) {
+      if (!operationRange) {
+        return;
+      }
+
+      const operationText =
+        fullQuery.slice(
+          operationRange.start,
+          operationRange.end
+        );
+
+      const nextOperation =
+        removeFieldSelection(
+          operationText,
+          isRootFieldClick
+            ? []
+            : [
+              rootFieldName,
+              ...targetPath,
+            ],
+          field.name
+        );
+
+      const formattedNextOperation =
+        stripGeneratedTypenamePlaceholders(
+          formatQueryPreservingOperationKeyword(
+            nextOperation,
+            fieldOperationType
+          )
+        );
+
+      const nextFullQuery =
+        replaceOperationAtRange(
+          fullQuery,
+          operationRange.start,
+          operationRange.end,
+          formattedNextOperation
+        );
+
+      view.dispatch({
+        changes: {
+          from: 0,
+          to:
+            view.state.doc.length,
+          insert:
+            nextFullQuery,
+        },
+        selection: {
+          anchor:
+            Math.min(
+              operationRange.start +
+              Math.max(
+                0,
+                formattedNextOperation.length - 1
+              ),
+              nextFullQuery.length
+            ),
+        },
+      });
+
+      view.focus();
+      syncRequiredArgumentVariables(
+        requiredRootArgs
+      );
+
+      return;
+    }
+
+    if (
+      selectionExistsInActiveOperation(
+        rootFieldName,
+        targetPath,
+        field.name
+      )
+    ) {
+      view.focus();
+      return;
+    }
+
+    // ==================================================
+    // EMPTY EDITOR
+    // ==================================================
+
+    if (
+      !fullQuery.trim()
+    ) {
+
+      const generated =
+        generateOperationForSelection(
+          schema,
+          rootFieldName,
+          targetPath,
+          field,
+          fullQuery
+        );
+
+      view.dispatch({
+        changes: {
+          from: 0,
+          to:
+            view.state.doc.length,
+          insert:
+            generated,
+        },
+        selection: {
+          anchor:
+            Math.max(
+              0,
+              generated.length - 1
+            ),
+        },
+      });
+
+      view.focus();
+      syncRequiredArgumentVariables(
+        requiredRootArgs
+      );
+
+      return;
+    }
+
+    if (
+      !operationRange &&
+      currentOperation.operationType === null
+    ) {
+      const generated =
+        generateOperationForSelection(
+          schema,
+          rootFieldName,
+          targetPath,
+          field,
+          fullQuery
+        );
+
+      const inserted =
+        insertOperationAtCursor(
+          fullQuery,
+          cursorPos,
+          generated
+        );
+
+      view.dispatch({
+        changes: {
+          from: 0,
+          to:
+            view.state.doc.length,
+          insert:
+            inserted.nextQuery,
+        },
+        selection: {
+          anchor:
+            inserted.operationStart +
+            Math.max(
+              0,
+              generated.length - 1
+            ),
+        },
+      });
+
+      view.focus();
+      syncRequiredArgumentVariables(
+        requiredRootArgs
+      );
+
+      return;
+    }
+
+    // ==================================================
+    // DIFFERENT OPERATION TYPE
+    // ==================================================
+
+    if (
+      currentOperation.operationType &&
+      fieldOperationType &&
+      currentOperation.operationType !==
+      fieldOperationType
+    ) {
+
+      const newOperation =
+        generateOperationForSelection(
+          schema,
+          rootFieldName,
+          targetPath,
+          field,
+          fullQuery
+        );
+
+      const nextQuery =
+        insertOperationBelow(
+          fullQuery,
+          currentOperation.operationEnd,
+          newOperation
+        );
+      const newOperationStart =
+        currentOperation.operationEnd +
+        2;
+
+      view.dispatch({
+        changes: {
+          from: 0,
+          to:
+            view.state.doc.length,
+          insert:
+            nextQuery,
+        },
+        selection: {
+          anchor:
+            newOperationStart +
+            Math.max(
+              0,
+              newOperation.length - 1
+            ),
+        },
+      });
+
+      view.focus();
+      syncRequiredArgumentVariables(
+        requiredRootArgs
+      );
+
+      return;
+    }
+
+    if (!operationRange) {
+      const generated =
+        generateOperationForSelection(
+          schema,
+          rootFieldName,
+          targetPath,
+          field,
+          fullQuery
+        );
+
+      const inserted =
+        insertOperationAtCursor(
+          fullQuery,
+          cursorPos,
+          generated
+        );
+
+      view.dispatch({
+        changes: {
+          from: 0,
+          to:
+            view.state.doc.length,
+          insert:
+            inserted.nextQuery,
+        },
+        selection: {
+          anchor:
+            inserted.operationStart +
+            Math.max(
+              0,
+              generated.length - 1
+            ),
+        },
+      });
+
+      view.focus();
+      syncRequiredArgumentVariables(
+        requiredRootArgs
+      );
+
+      return;
+    }
+
+    // ==================================================
+    // CURRENT BLOCK
+    // ==================================================
+
+    const currentText =
       fullQuery.slice(
         operationRange.start,
         operationRange.end
       );
 
-    const nextOperation =
-      removeFieldSelection(
-        operationText,
-        isRootFieldClick
-          ? []
-          : [
-            rootFieldName,
-            ...targetPath,
-          ],
-        field.name
+    const fullPath = [
+      rootFieldName,
+      ...targetPath,
+    ];
+
+    let query =
+      autoCloseBraces(
+        currentText
       );
 
-    const formattedNextOperation =
-      stripGeneratedTypenamePlaceholders(
-        formatQueryPreservingOperationKeyword(
-          nextOperation,
-          fieldOperationType
-        )
+    query =
+      ensureRootFieldInOperation(
+        query,
+        rootFieldName,
+        schema
+      );
+
+    if (!isRootFieldClick) {
+      query =
+        ensureFieldPath(
+          query,
+          fullPath
+        );
+
+      query =
+        insertFieldAtPath(
+          query,
+          fullPath,
+          buildFieldSelectionSnippet(
+            field
+          )
+        );
+    }
+
+    query =
+      formatQueryPreservingOperationKeyword(
+        stripGeneratedTypenamePlaceholders(
+          query
+        ),
+        fieldOperationType
       );
 
     const nextFullQuery =
@@ -4951,7 +6368,7 @@ const Home: React.FC = () => {
         fullQuery,
         operationRange.start,
         operationRange.end,
-        formattedNextOperation
+        query
       );
 
     view.dispatch({
@@ -4964,66 +6381,10 @@ const Home: React.FC = () => {
       },
       selection: {
         anchor:
-          Math.min(
-              operationRange.start +
-              Math.max(
-                0,
-                formattedNextOperation.length - 1
-              ),
-            nextFullQuery.length
-          ),
-      },
-    });
-
-    view.focus();
-    syncRequiredArgumentVariables(
-      requiredRootArgs
-    );
-
-    return;
-  }
-
-  if (
-    selectionExistsInActiveOperation(
-      rootFieldName,
-      targetPath,
-      field.name
-    )
-  ) {
-    view.focus();
-    return;
-  }
-
-  // ==================================================
-  // EMPTY EDITOR
-  // ==================================================
-
-  if (
-    !fullQuery.trim()
-  ) {
-
-    const generated =
-      generateOperationForSelection(
-        schema,
-        rootFieldName,
-        targetPath,
-        field,
-        fullQuery
-      );
-
-    view.dispatch({
-      changes: {
-        from: 0,
-        to:
-          view.state.doc.length,
-        insert:
-          generated,
-      },
-      selection: {
-        anchor:
+          operationRange.start +
           Math.max(
             0,
-            generated.length - 1
+            query.length - 1
           ),
       },
     });
@@ -5032,238 +6393,7 @@ const Home: React.FC = () => {
     syncRequiredArgumentVariables(
       requiredRootArgs
     );
-
-    return;
   }
-
-  if (
-    !operationRange &&
-    currentOperation.operationType === null
-  ) {
-    const generated =
-      generateOperationForSelection(
-        schema,
-        rootFieldName,
-        targetPath,
-        field,
-        fullQuery
-      );
-
-    const inserted =
-      insertOperationAtCursor(
-        fullQuery,
-        cursorPos,
-        generated
-      );
-
-    view.dispatch({
-      changes: {
-        from: 0,
-        to:
-          view.state.doc.length,
-        insert:
-          inserted.nextQuery,
-      },
-      selection: {
-        anchor:
-          inserted.operationStart +
-          Math.max(
-            0,
-            generated.length - 1
-          ),
-      },
-    });
-
-    view.focus();
-    syncRequiredArgumentVariables(
-      requiredRootArgs
-    );
-
-    return;
-  }
-
-  // ==================================================
-  // DIFFERENT OPERATION TYPE
-  // ==================================================
-
-  if (
-    currentOperation.operationType &&
-    fieldOperationType &&
-    currentOperation.operationType !==
-      fieldOperationType
-  ) {
-
-    const newOperation =
-      generateOperationForSelection(
-        schema,
-        rootFieldName,
-        targetPath,
-        field,
-        fullQuery
-      );
-
-    const nextQuery =
-      insertOperationBelow(
-        fullQuery,
-        currentOperation.operationEnd,
-        newOperation
-      );
-    const newOperationStart =
-      currentOperation.operationEnd +
-      2;
-
-    view.dispatch({
-      changes: {
-        from: 0,
-        to:
-          view.state.doc.length,
-        insert:
-          nextQuery,
-      },
-      selection: {
-        anchor:
-          newOperationStart +
-          Math.max(
-            0,
-            newOperation.length - 1
-          ),
-      },
-    });
-
-    view.focus();
-    syncRequiredArgumentVariables(
-      requiredRootArgs
-    );
-
-    return;
-  }
-
-  if (!operationRange) {
-    const generated =
-      generateOperationForSelection(
-        schema,
-        rootFieldName,
-        targetPath,
-        field,
-        fullQuery
-      );
-
-    const inserted =
-      insertOperationAtCursor(
-        fullQuery,
-        cursorPos,
-        generated
-      );
-
-    view.dispatch({
-      changes: {
-        from: 0,
-        to:
-          view.state.doc.length,
-        insert:
-          inserted.nextQuery,
-      },
-      selection: {
-        anchor:
-          inserted.operationStart +
-          Math.max(
-            0,
-            generated.length - 1
-          ),
-      },
-    });
-
-    view.focus();
-    syncRequiredArgumentVariables(
-      requiredRootArgs
-    );
-
-    return;
-  }
-
-  // ==================================================
-  // CURRENT BLOCK
-  // ==================================================
-
-  const currentText =
-    fullQuery.slice(
-      operationRange.start,
-      operationRange.end
-    );
-
-  const fullPath = [
-    rootFieldName,
-    ...targetPath,
-  ];
-
-  let query =
-    autoCloseBraces(
-      currentText
-    );
-
-  query =
-    ensureRootFieldInOperation(
-      query,
-      rootFieldName,
-      schema
-    );
-
-  if (!isRootFieldClick) {
-    query =
-      ensureFieldPath(
-        query,
-        fullPath
-      );
-
-    query =
-      insertFieldAtPath(
-        query,
-        fullPath,
-        buildFieldSelectionSnippet(
-          field
-        )
-      );
-  }
-
-  query =
-    formatQueryPreservingOperationKeyword(
-      stripGeneratedTypenamePlaceholders(
-        query
-      ),
-      fieldOperationType
-    );
-
-  const nextFullQuery =
-    replaceOperationAtRange(
-      fullQuery,
-      operationRange.start,
-      operationRange.end,
-      query
-    );
-
-  view.dispatch({
-    changes: {
-      from: 0,
-      to:
-        view.state.doc.length,
-      insert:
-        nextFullQuery,
-    },
-    selection: {
-      anchor:
-        operationRange.start +
-        Math.max(
-          0,
-          query.length - 1
-        ),
-    },
-  });
-
-  view.focus();
-  syncRequiredArgumentVariables(
-    requiredRootArgs
-  );
-}
 
   function handleArgumentClick(
     rootField: ExplorerField,
@@ -5272,7 +6402,7 @@ const Home: React.FC = () => {
   ) {
     const view =
       editorViewRef.current[
-        "operation"
+      "operation"
       ];
 
     const schema =
@@ -5330,7 +6460,7 @@ const Home: React.FC = () => {
       if (
         !active ||
         active.type !==
-          fieldOperationType
+        fieldOperationType
       ) {
         return;
       }
@@ -5436,7 +6566,7 @@ const Home: React.FC = () => {
     if (
       currentOperation.operationType &&
       currentOperation.operationType !==
-        fieldOperationType
+      fieldOperationType
     ) {
       const newOperation =
         createOperationWithArgument();
@@ -5557,52 +6687,2209 @@ const Home: React.FC = () => {
     syncClickedArgumentVariable();
   }
 
+  function saveActiveWorkTabFromEditors() {
+    if (!activeWorkTab) {
+      return;
+    }
+
+    const currentId =
+      activeWorkTabId;
+
+    updateWorkTab(
+      currentId,
+      {
+        operation:
+          getEditorText("operation"),
+        variables:
+          getEditorText("variables"),
+        headers:
+          getEditorText("headers"),
+        response:
+          getEditorText("result"),
+      }
+    );
+  }
+
+  function getActiveWorkTabSnapshot() {
+    if (!activeWorkTab) {
+      return createWorkspaceTab(1);
+    }
+
+    return {
+      ...activeWorkTab,
+      operation:
+        getEditorText("operation") ||
+        activeWorkTab.operation,
+      variables:
+        getEditorText("variables") ||
+        activeWorkTab.variables,
+      headers:
+        getEditorText("headers") ||
+        activeWorkTab.headers,
+      response:
+        getEditorText("result") ||
+        activeWorkTab.response,
+    };
+  }
+
+  function openSaveDialog() {
+    const snapshot =
+      getActiveWorkTabSnapshot();
+
+    setSaveDialogDraft({
+      name:
+        snapshot.title.replace(
+          /\s\*$/,
+          ""
+        ) || "Untitled API",
+      collection:
+        snapshot.collection ||
+        "Default",
+      folder:
+        snapshot.folder ||
+        "",
+    });
+    setSaveDialogOpen(true);
+  }
+
+  async function saveActiveTab(
+    draft = saveDialogDraft
+  ) {
+    const snapshot =
+      getActiveWorkTabSnapshot();
+
+    const saved =
+      await SaveSavedAPI({
+        id:
+          snapshot.savedApiId ||
+          "",
+        name:
+          draft.name ||
+          snapshot.title ||
+          "Untitled API",
+        collection:
+          draft.collection ||
+          "Default",
+        folder:
+          draft.folder ||
+          "",
+        endpoint:
+          lastEndpoint,
+        query:
+          snapshot.operation,
+        variables:
+          snapshot.variables,
+        headers:
+          snapshot.headers,
+        updatedAt:
+          0,
+      } as any) as SavedAPIItem;
+
+    updateWorkTab(
+      activeWorkTabId,
+      {
+        savedApiId:
+          saved.id,
+        title:
+          saved.name,
+        collection:
+          saved.collection,
+        folder:
+          saved.folder,
+        operation:
+          saved.query,
+        variables:
+          saved.variables,
+        headers:
+          saved.headers,
+        isDirty:
+          false,
+      }
+    );
+
+    setActiveSavedAPI(saved);
+    setSaveDialogOpen(false);
+    await refreshSavedAPIs();
+  }
+
+  function handleSaveShortcut() {
+    const snapshot =
+      getActiveWorkTabSnapshot();
+
+    if (snapshot.savedApiId) {
+      saveActiveTab({
+        name:
+          snapshot.title,
+        collection:
+          snapshot.collection ||
+          "Default",
+        folder:
+          snapshot.folder ||
+          "",
+      });
+      return;
+    }
+
+    openSaveDialog();
+  }
+
+  useEffect(() => {
+    const handleKeyDown = (
+      event: KeyboardEvent
+    ) => {
+      const target =
+        event.target as HTMLElement | null;
+      const isEditableTarget =
+        !!target &&
+        (
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable ||
+          !!target.closest(".cm-editor")
+        );
+
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        event.key.toLowerCase() === "s"
+      ) {
+        event.preventDefault();
+        handleSaveShortcut();
+      }
+
+      if (
+        isEditableTarget ||
+        sidebarMode !== "collections" ||
+        !(event.ctrlKey || event.metaKey)
+      ) {
+        return;
+      }
+
+      const key =
+        event.key.toLowerCase();
+
+      if (
+        (key === "c" || key === "x") &&
+        selectedSavedAPIId
+      ) {
+        event.preventDefault();
+        setSavedAPIClipboard({
+          apiId:
+            selectedSavedAPIId,
+          mode:
+            key === "x"
+              ? "cut"
+              : "copy",
+        });
+      }
+
+      if (key === "v") {
+        event.preventDefault();
+        pasteSavedAPIClipboard();
+      }
+    };
+
+    window.addEventListener(
+      "keydown",
+      handleKeyDown
+    );
+
+    return () => {
+      window.removeEventListener(
+        "keydown",
+        handleKeyDown
+      );
+    };
+  }, [
+    activeWorkTab,
+    lastEndpoint,
+    saveDialogDraft,
+    sidebarMode,
+    selectedSavedAPIId,
+    savedAPIClipboard,
+    selectedCollectionTarget,
+    savedAPIs,
+  ]);
+
+  function selectWorkTab(
+    tabId: string
+  ) {
+    if (
+      tabId ===
+      activeWorkTabId
+    ) {
+      return;
+    }
+
+    saveActiveWorkTabFromEditors();
+    setActiveWorkTabId(tabId);
+    setResponseCopied(false);
+
+    const nextTab =
+      workTabs.find(
+        (tab) =>
+          tab.id === tabId
+      );
+
+    const savedApi =
+      nextTab?.savedApiId
+        ? savedAPIs.find(
+          (api) =>
+            api.id ===
+            nextTab.savedApiId
+        )
+        : null;
+
+    if (savedApi) {
+      focusSavedAPIExplorer(
+        savedApi
+      );
+    }
+  }
+
+  function addWorkTab() {
+    saveActiveWorkTabFromEditors();
+
+    const nextIndex =
+      workTabs.length + 1;
+
+    const nextTab =
+      createWorkspaceTab(
+        nextIndex
+      );
+
+    setWorkTabs((currentTabs) => [
+      ...currentTabs,
+      nextTab,
+    ]);
+    setActiveWorkTabId(
+      nextTab.id
+    );
+    setResponseCopied(false);
+  }
+
+  function closeWorkTab(
+    tabId: string,
+    force = false
+  ) {
+    const closingTab =
+      workTabs.find(
+        (tab) =>
+          tab.id === tabId
+      );
+
+    if (
+      closingTab?.isDirty &&
+      !force
+    ) {
+      setCloseConfirmTabId(
+        tabId
+      );
+      return;
+    }
+
+    if (
+      tabId ===
+      activeWorkTabId
+    ) {
+      saveActiveWorkTabFromEditors();
+    }
+
+    const tabIndex =
+      workTabs.findIndex(
+        (tab) =>
+          tab.id === tabId
+      );
+
+    const nextTabs =
+      workTabs.filter(
+        (tab) =>
+          tab.id !== tabId
+      );
+
+    const nextActiveTab =
+      tabId === activeWorkTabId
+        ? nextTabs[
+          Math.max(
+            0,
+            tabIndex - 1
+          )
+        ] ?? null
+        : activeWorkTab;
+
+    setWorkTabs(nextTabs);
+    setActiveWorkTabId(
+      nextActiveTab?.id ?? ""
+    );
+
+    const savedApi =
+      nextActiveTab?.savedApiId
+        ? savedAPIs.find(
+          (api) =>
+            api.id ===
+            nextActiveTab.savedApiId
+        )
+        : null;
+
+    if (savedApi) {
+      focusSavedAPIExplorer(
+        savedApi
+      );
+    } else if (!nextActiveTab) {
+      backToDocumentation();
+    } else if (
+      activeSavedAPI?.id ===
+      closingTab?.savedApiId
+    ) {
+      backToDocumentation();
+    }
+
+    setResponseCopied(false);
+    setCloseConfirmTabId(null);
+  }
+
+  function closeAllWorkTabs(
+    force = false
+  ) {
+    if (
+      !force &&
+      workTabs.some((tab) => tab.isDirty)
+    ) {
+      const dirtyTab =
+        workTabs.find((tab) => tab.isDirty);
+
+      setCloseConfirmTabId(
+        dirtyTab?.id ?? null
+      );
+      return;
+    }
+
+    setWorkTabs([]);
+    setActiveWorkTabId("");
+    setResponseCopied(false);
+    setTabContextMenu(null);
+    backToDocumentation();
+  }
+
+  function togglePinWorkTab(
+    tabId: string
+  ) {
+    setWorkTabs((currentTabs) =>
+      currentTabs.map((tab) =>
+        tab.id === tabId
+          ? {
+            ...tab,
+            pinned:
+              !tab.pinned,
+          }
+          : tab
+      )
+    );
+    setTabContextMenu(null);
+  }
+
+  function setActiveRequestConfigTab(
+    tab:
+      RequestConfigTab
+  ) {
+    if (!activeWorkTab) {
+      return;
+    }
+
+    updateWorkTab(
+      activeWorkTab.id,
+      {
+        requestConfigTab:
+          tab,
+      }
+    );
+  }
+
+  function getFirstRootFieldName(
+    query: string
+  ) {
+    try {
+      const ast =
+        parse(
+          query.replace(
+            /\{\s*\}/gs,
+            "{ __typename }"
+          )
+        );
+
+      for (const def of ast.definitions) {
+        if (
+          def.kind !==
+          Kind.OPERATION_DEFINITION
+        ) {
+          continue;
+        }
+
+        const rootField =
+          def.selectionSet.selections.find(
+            (selection): selection is FieldNode =>
+              selection.kind ===
+              Kind.FIELD
+          );
+
+        return rootField?.name.value ?? null;
+      }
+    } catch {
+      return null;
+    }
+
+    return null;
+  }
+
+  function focusSavedAPIExplorer(
+    api: SavedAPIItem
+  ) {
+    setActiveSavedAPI(api);
+    setSidebarMode("saved-api");
+    dispatch(
+      setEndpoint(api.endpoint)
+    );
+
+    const schema =
+      schemaRef.current;
+
+    if (!schema) {
+      return;
+    }
+
+    const rootFieldName =
+      getFirstRootFieldName(
+        api.query
+      );
+
+    if (!rootFieldName) {
+      return;
+    }
+
+    const operationType =
+      getRootOperationType(
+        schema,
+        rootFieldName
+      );
+
+    const rootTypeName =
+      operationType === "subscription"
+        ? "Subscription"
+        : operationType === "mutation"
+        ? "Mutation"
+        : "Query";
+
+    const rootField =
+      explorerSchema[
+        rootTypeName
+      ]?.fields.find(
+        (field) =>
+          field.name ===
+          rootFieldName
+      );
+
+    if (!rootField) {
+      return;
+    }
+
+    setSelectedField(rootField);
+    setCurrentType(
+      rootField.nextTypeName ||
+      rootTypeName
+    );
+    setStack([
+      {
+        typeName: null,
+        fieldName: "Root",
+      },
+      {
+        typeName:
+          rootTypeName,
+        fieldName:
+          rootTypeName,
+      },
+      {
+        typeName:
+          rootField.nextTypeName ||
+          rootTypeName,
+        fieldName:
+          rootField.name,
+      },
+    ]);
+    setSearchKeyword("");
+  }
+
+  function openSavedAPI(
+    api: SavedAPIItem
+  ) {
+    saveActiveWorkTabFromEditors();
+
+    const existingTab =
+      workTabs.find(
+        (tab) =>
+          tab.savedApiId ===
+          api.id
+      );
+
+    if (existingTab) {
+      setActiveWorkTabId(
+        existingTab.id
+      );
+      focusSavedAPIExplorer(api);
+      return;
+    }
+
+    const nextTab: WorkspaceTab = {
+      id:
+        `workspace-${Date.now()}-${api.id}`,
+      title:
+        api.name,
+      savedApiId:
+        api.id,
+      collection:
+        api.collection,
+      folder:
+        api.folder,
+      operation:
+        api.query,
+      variables:
+        api.variables || "{}",
+      headers:
+        api.headers || "{}",
+      response:
+        "",
+      requestConfigTab:
+        "variables",
+      responsePanelTab:
+        "body",
+      responseHeaders:
+        {},
+      responseCookies:
+        [],
+      isDirty:
+        false,
+    };
+
+    setWorkTabs((currentTabs) => [
+      ...currentTabs,
+      nextTab,
+    ]);
+
+    setActiveWorkTabId(
+      nextTab.id
+    );
+    focusSavedAPIExplorer(api);
+  }
+
+  function backToDocumentation() {
+    setSidebarMode("collections");
+    setActiveSavedAPI(null);
+    refreshSavedAPIs();
+  }
+
+  function getFilteredSavedAPIs() {
+    const keyword =
+      collectionSearchKeyword.trim().toLowerCase();
+
+    if (!keyword) {
+      return savedAPIs;
+    }
+
+    return savedAPIs.filter((api) =>
+      [
+        api.name,
+        api.folder,
+        api.collection,
+        api.endpoint,
+      ]
+        .filter(Boolean)
+        .some((value) =>
+          value.toLowerCase().includes(keyword)
+        )
+    );
+  }
+
+  function getCollectionGroups() {
+    const groups:
+      Record<
+        string,
+        Record<string, SavedAPIItem[]>
+      > = {};
+
+    getFilteredSavedAPIs().forEach((api) => {
+      const collection =
+        api.collection || "Default";
+      const folder =
+        api.folder || "Root";
+
+      groups[collection] ??= {};
+      groups[collection][folder] ??= [];
+      groups[collection][folder].push(api);
+    });
+
+    return groups;
+  }
+
+  function savedAPIMatchesSearch(
+    api: SavedAPIItem
+  ) {
+    const keyword =
+      collectionSearchKeyword.trim().toLowerCase();
+
+    if (!keyword) {
+      return true;
+    }
+
+    return [
+      api.name,
+      api.folder,
+      api.collection,
+      api.endpoint,
+    ]
+      .filter(Boolean)
+      .some((value) =>
+        value.toLowerCase().includes(keyword)
+      );
+  }
+
+  function collectionOrFolderMatchesSearch(
+    value: string
+  ) {
+    const keyword =
+      collectionSearchKeyword.trim().toLowerCase();
+
+    return (
+      !keyword ||
+      value.toLowerCase().includes(keyword)
+    );
+  }
+
+  function getAPIsForFolder(
+    collection: string,
+    folderPath: string
+  ) {
+    const normalizedPath =
+      folderPath.replace(/^\/+|\/+$/g, "");
+
+    return savedAPIs.filter((api) =>
+      (api.collection || "Default") === collection &&
+      (api.folder || "") === normalizedPath &&
+      savedAPIMatchesSearch(api)
+    );
+  }
+
+  function getDescendantFolderPaths(
+    folder: SavedFolderItem,
+    folderPath: string
+  ): string[] {
+    return [
+      folderPath,
+      ...(folder.folders ?? []).flatMap((child) =>
+        getDescendantFolderPaths(
+          child,
+          `${folderPath}/${child.name}`
+        )
+      ),
+    ];
+  }
+
+  function getFolderAPICount(
+    collection: string,
+    folder: SavedFolderItem,
+    folderPath: string
+  ) {
+    const paths =
+      new Set(
+        getDescendantFolderPaths(
+          folder,
+          folderPath
+        )
+      );
+
+    return savedAPIs.filter(
+      (api) =>
+        (api.collection || "Default") === collection &&
+        paths.has(api.folder || "")
+    ).length;
+  }
+
+  function getCollectionAPICount(
+    collection: string
+  ) {
+    return savedAPIs.filter(
+      (api) =>
+        (api.collection || "Default") === collection
+    ).length;
+  }
+
+  function toggleStringItem(
+    items: string[],
+    item: string
+  ) {
+    return items.includes(item)
+      ? items.filter((value) => value !== item)
+      : [
+        ...items,
+        item,
+      ];
+  }
+
+  function toggleExpandedCollection(
+    collection: string
+  ) {
+    setExpandedCollections((items) =>
+      toggleStringItem(
+        items,
+        collection
+      )
+    );
+  }
+
+  function toggleExpandedFolder(
+    key: string
+  ) {
+    setExpandedFolders((items) =>
+      toggleStringItem(
+        items,
+        key
+      )
+    );
+  }
+
+  function toggleSavePickerCollection(
+    collection: string
+  ) {
+    setSavePickerExpandedCollections((items) =>
+      toggleStringItem(
+        items,
+        collection
+      )
+    );
+  }
+
+  function toggleSavePickerFolder(
+    key: string
+  ) {
+    setSavePickerExpandedFolders((items) =>
+      toggleStringItem(
+        items,
+        key
+      )
+    );
+  }
+
+  function folderHasVisibleContent(
+    collection: string,
+    folder: SavedFolderItem,
+    folderPath: string
+  ): boolean {
+    return (
+      collectionOrFolderMatchesSearch(folder.name) ||
+      getAPIsForFolder(collection, folderPath).length > 0 ||
+      (folder.folders ?? []).some((child) =>
+        folderHasVisibleContent(
+          collection,
+          child,
+          `${folderPath}/${child.name}`
+        )
+      )
+    );
+  }
+
+  function getFolderPathOptions(
+    folders: SavedFolderItem[],
+    parentPath = ""
+  ): string[] {
+    return folders.flatMap((folder) => {
+      const path =
+        parentPath
+          ? `${parentPath}/${folder.name}`
+          : folder.name;
+
+      return [
+        path,
+        ...getFolderPathOptions(
+          folder.folders ?? [],
+          path
+        ),
+      ];
+    });
+  }
+
+  async function createCollection(
+    name: string
+  ) {
+    const value =
+      name.trim();
+
+    if (!value) {
+      return;
+    }
+
+    if (
+      savedCollections.some(
+        (collection) =>
+          collection.name.toLowerCase() ===
+          value.toLowerCase()
+      )
+    ) {
+      showToast("error", "Collection already exists.");
+      return;
+    }
+
+    try {
+      await SaveCollection(value);
+    } catch (error: any) {
+      showToast(
+        "error",
+        error?.message?.includes("collection name already exists")
+          ? "Collection already exists."
+          : "Failed to create collection."
+      );
+      return;
+    }
+    setSaveDialogDraft((draft) => ({
+      ...draft,
+      collection:
+        value,
+    }));
+    setCollectionDialog({
+      open: false,
+      mode: "create",
+      oldName: "",
+      name: "",
+    });
+    await refreshSavedAPIs();
+  }
+
+  async function createFolder(
+    collection: string,
+    parentPath: string,
+    name: string
+  ) {
+    const value =
+      name.trim();
+
+    if (!value) {
+      return;
+    }
+
+    const normalizedParent =
+      parentPath.trim().replace(/^\/+|\/+$/g, "");
+
+    const nextPath =
+      normalizedParent
+        ? `${normalizedParent}/${value}`
+        : value;
+
+    if (
+      getFolderPathOptions(
+        savedCollections.find(
+          (item) =>
+            item.name === collection
+        )?.folders ?? []
+      ).some(
+        (folder) =>
+          folder.toLowerCase() ===
+          nextPath.toLowerCase()
+      )
+    ) {
+      showToast("error", "Folder already exists.");
+      return;
+    }
+
+    try {
+      await SaveFolder({
+        collection:
+          collection || "Default",
+        parentPath:
+          normalizedParent,
+        name:
+          value,
+      } as any);
+    } catch (error: any) {
+      showToast(
+        "error",
+        error?.message?.includes("folder name already exists")
+          ? "Folder already exists."
+          : "Failed to create folder."
+      );
+      return;
+    }
+
+    setSaveDialogDraft((draft) => ({
+      ...draft,
+      folder:
+        nextPath,
+    }));
+    setFolderDialog({
+      open: false,
+      mode: "create",
+      collection: "Default",
+      parentPath: "",
+      folderPath: "",
+      name: "",
+    });
+    await refreshSavedAPIs();
+  }
+
+  async function renameCollectionAction() {
+    const oldName =
+      collectionDialog.oldName;
+    const newName =
+      collectionDialog.name.trim();
+
+    if (!oldName || !newName) {
+      return;
+    }
+
+    await RenameCollection({
+      oldName,
+      newName,
+    } as any);
+    setCollectionDialog({
+      open: false,
+      mode: "create",
+      oldName: "",
+      name: "",
+    });
+    await refreshSavedAPIs();
+  }
+
+  async function renameFolderAction() {
+    if (
+      !folderDialog.collection ||
+      !folderDialog.folderPath ||
+      !folderDialog.name.trim()
+    ) {
+      return;
+    }
+
+    await RenameFolder({
+      collection:
+        folderDialog.collection,
+      folderPath:
+        folderDialog.folderPath,
+      newName:
+        folderDialog.name,
+    } as any);
+    setFolderDialog({
+      open: false,
+      mode: "create",
+      collection: "Default",
+      parentPath: "",
+      folderPath: "",
+      name: "",
+    });
+    await refreshSavedAPIs();
+  }
+
+  async function deleteContextTarget() {
+    if (!contextMenu) {
+      return;
+    }
+
+    if (
+      contextMenu.type ===
+      "collection"
+    ) {
+      await DeleteCollection(
+        contextMenu.collection
+      );
+    }
+
+    if (
+      contextMenu.type ===
+      "folder"
+    ) {
+      await DeleteFolder({
+        collection:
+          contextMenu.collection,
+        folderPath:
+          contextMenu.folderPath,
+      } as any);
+    }
+
+    if (
+      contextMenu.type ===
+      "api"
+    ) {
+      await DeleteSavedAPI(
+        contextMenu.api.id
+      );
+    }
+
+    setContextMenu(null);
+    await refreshSavedAPIs();
+  }
+
+  async function pasteSavedAPIClipboard() {
+    if (!savedAPIClipboard) {
+      return;
+    }
+
+    const api =
+      savedAPIs.find(
+        (item) =>
+          item.id ===
+          savedAPIClipboard.apiId
+      );
+
+    if (!api) {
+      setSavedAPIClipboard(null);
+      return;
+    }
+
+    const targetCollection =
+      selectedCollectionTarget.collection ||
+      api.collection ||
+      "Default";
+
+    const targetFolder =
+      selectedCollectionTarget.folder ||
+      "";
+
+    if (
+      savedAPIClipboard.mode === "copy"
+    ) {
+      await SaveSavedAPI({
+        ...api,
+        id: "",
+        name:
+          `${api.name} Copy`,
+        collection:
+          targetCollection,
+        folder:
+          targetFolder,
+        updatedAt:
+          0,
+      } as any);
+    } else {
+      await SaveSavedAPI({
+        ...api,
+        collection:
+          targetCollection,
+        folder:
+          targetFolder,
+        updatedAt:
+          0,
+      } as any);
+      setSavedAPIClipboard(null);
+    }
+
+    await refreshSavedAPIs();
+  }
+
+  async function exportCollection(
+    collectionName: string
+  ) {
+    const collection =
+      savedCollections.find(
+        (item) =>
+          item.name === collectionName
+      );
+
+    if (!collection) {
+      showToast("error", "Collection not found.");
+      return;
+    }
+
+    const payload: CollectionExportPayload = {
+      type:
+        "graph-space-collection",
+      version:
+        1,
+      collection,
+      apis:
+        savedAPIs.filter(
+          (api) =>
+            (api.collection || "Default") === collectionName
+        ),
+    };
+
+    try {
+      await SaveJSONFile(
+        `${collectionName}.graphspace-collection.json`,
+        JSON.stringify(payload, null, 2)
+      );
+      showToast("success", "Collection exported successfully.");
+    } catch {
+      showToast("error", "Failed to export collection.");
+    }
+  }
+
+  async function importCollection() {
+    try {
+      const result =
+        await OpenJSONFile();
+
+      const payload =
+        JSON.parse(result.content) as CollectionExportPayload;
+
+      if (
+        payload.type !==
+          "graph-space-collection" ||
+        !payload.collection?.name
+      ) {
+        throw new Error("Invalid collection file.");
+      }
+
+      if (
+        savedCollections.some(
+          (collection) =>
+            collection.name.toLowerCase() ===
+            payload.collection.name.toLowerCase()
+        )
+      ) {
+        throw new Error("Collection already exists.");
+      }
+
+      await SaveCollection(
+        payload.collection.name
+      );
+
+      const createFolders = async (
+        folders: SavedFolderItem[],
+        parentPath = ""
+      ) => {
+        for (const folder of folders) {
+          await SaveFolder({
+            collection:
+              payload.collection.name,
+            parentPath,
+            name:
+              folder.name,
+          } as any);
+
+          await createFolders(
+            folder.folders ?? [],
+            parentPath
+              ? `${parentPath}/${folder.name}`
+              : folder.name
+          );
+        }
+      };
+
+      await createFolders(
+        payload.collection.folders ?? []
+      );
+
+      for (const api of payload.apis ?? []) {
+        await SaveSavedAPI({
+          ...api,
+          id: "",
+          collection:
+            payload.collection.name,
+          updatedAt:
+            0,
+        } as any);
+      }
+
+      await refreshSavedAPIs();
+      showToast("success", "Collection imported successfully.");
+    } catch (error: any) {
+      const message =
+        error?.message === "Collection already exists."
+          ? "Collection already exists."
+          : "Failed to import collection.";
+
+      showToast("error", message);
+    }
+  }
+
+  async function createEnvironment() {
+    const nextEnvironment: EnvironmentItem = {
+      id:
+        `environment-${Date.now()}`,
+      name:
+        "New Environment",
+      variables:
+        [],
+    };
+
+    await persistEnvironmentStore({
+      activeEnvironmentId:
+        nextEnvironment.id,
+      environments: [
+        ...environmentStore.environments,
+        nextEnvironment,
+      ],
+    });
+    setEditingEnvironmentId(
+      nextEnvironment.id
+    );
+    setEnvironmentEditorOpen(true);
+    setEnvironmentMenuOpen(false);
+  }
+
+  async function updateEnvironment(
+    environment: EnvironmentItem
+  ) {
+    await persistEnvironmentStore({
+      ...environmentStore,
+      environments:
+        environmentStore.environments.map((item) =>
+          item.id === environment.id
+            ? environment
+            : item
+        ),
+    });
+  }
+
+  async function exportEnvironmentStore() {
+    try {
+      await SaveJSONFile(
+        "graph-space-environments.json",
+        JSON.stringify(
+          {
+            type: "graph-space-environments",
+            version: 1,
+            ...environmentStore,
+          },
+          null,
+          2
+        )
+      );
+      showToast("success", "Environments exported successfully.");
+    } catch {
+      showToast("error", "Failed to export environments.");
+    }
+  }
+
+  async function importEnvironmentStore() {
+    try {
+      const result =
+        await OpenJSONFile();
+      const payload =
+        JSON.parse(result.content);
+
+      const nextStore: EnvironmentStorePayload = {
+        activeEnvironmentId:
+          payload.activeEnvironmentId || "",
+        environments:
+          payload.environments || [],
+      };
+
+      if (!Array.isArray(nextStore.environments)) {
+        throw new Error("Invalid environment file.");
+      }
+
+      await persistEnvironmentStore(
+        nextStore
+      );
+      showToast("success", "Environments imported successfully.");
+    } catch {
+      showToast("error", "Failed to import environments.");
+    }
+  }
+
+  async function saveGoogleDriveSettings() {
+    try {
+      const config =
+        await SaveGoogleDriveConfig({
+          clientId:
+            googleConfig.clientId,
+          clientSecret:
+            googleConfig.clientSecret,
+          accountEmail:
+            googleConfig.accountEmail,
+          redirectPort:
+            53682,
+          lockTTLSecond:
+            60,
+        } as any);
+
+      setGoogleConfig({
+        clientId:
+          (config as GoogleDriveConfigView).clientId || "",
+        clientSecret:
+          "",
+        clientSecretSet:
+          (config as GoogleDriveConfigView).clientSecretSet || false,
+        accountEmail:
+          (config as GoogleDriveConfigView).accountEmail || googleConfig.accountEmail,
+      });
+      setCloudSettingsOpen(false);
+      showToast("success", "Google Drive settings saved.");
+      await refreshCloudState();
+    } catch {
+      showToast("error", "Failed to save Google Drive settings.");
+    }
+  }
+
+  async function syncToGoogleDrive() {
+    try {
+      const state =
+        await SyncAllWorkspacesToGoogleDrive();
+      setCloudSyncState(
+        state as CloudSyncState
+      );
+      showToast("success", "Google Drive sync completed.");
+    } catch {
+      showToast("error", "Failed to sync Google Drive.");
+    }
+  }
+
+  async function requestGoogleDriveAccess() {
+    try {
+      const state =
+        await RequestGoogleDriveAccess();
+      setCloudSyncState(
+        state as CloudSyncState
+      );
+      showToast("success", "Google Drive connected.");
+    } catch {
+      showToast("error", "Failed to connect Google Drive.");
+    }
+  }
+
+  async function pullFromGoogleDrive() {
+    try {
+      const state =
+        await PullWorkspacesFromGoogleDrive();
+      setCloudSyncState(
+        state as CloudSyncState
+      );
+      await refreshSavedAPIs();
+      showToast("success", "Pulled collection data from Google Drive.");
+    } catch {
+      showToast("error", "Failed to pull from Google Drive.");
+    }
+  }
+
+  function renderCloudIcon() {
+    if (cloudSyncState.status === "synced") {
+      return <CloudCheck size={25} className="mr-1 text-green-1" />;
+    }
+
+    if (cloudSyncState.status === "pull_available") {
+      return <CloudDownload size={25} className="mr-1 text-amber-400" />;
+    }
+
+    if (cloudSyncState.status === "pending") {
+      return <CloudUpload size={25} className="mr-1 text-amber-400" />;
+    }
+
+    if (cloudSyncState.status === "error") {
+      return <CloudOff size={25} className="mr-1 text-red-300" />;
+    }
+
+    return <CiCloudOnIcon strokeWidth={0.5} size={28} className='mr-1 text-white/30' />;
+  }
+
+  function renderHighlightedEnvironmentText(
+    text: string
+  ) {
+    const parts:
+      React.ReactNode[] = [];
+    const regex =
+      /\{\{[A-Za-z0-9_:-]+\}\}/g;
+    let lastIndex = 0;
+    let match:
+      | RegExpExecArray
+      | null;
+
+    while (
+      (match = regex.exec(text))
+    ) {
+      if (match.index > lastIndex) {
+        parts.push(
+          <span key={`text-${lastIndex}`}>
+            {text.slice(lastIndex, match.index)}
+          </span>
+        );
+      }
+
+      parts.push(
+        <span key={`env-${match.index}`} className="rounded-[3px] bg-amber-500/15 text-amber-400">
+          {match[0]}
+        </span>
+      );
+      lastIndex =
+        match.index + match[0].length;
+    }
+
+    if (lastIndex < text.length) {
+      parts.push(
+        <span key={`text-${lastIndex}`}>
+          {text.slice(lastIndex)}
+        </span>
+      );
+    }
+
+    return parts;
+  }
+
+  useEffect(() => {
+    const instance =
+      tabScrollRef.current?.osInstance?.();
+
+    const viewport =
+      instance?.elements?.().viewport ??
+      tabScrollRef.current;
+
+    if (!viewport) {
+      return;
+    }
+
+    const activeTabElement =
+      viewport.querySelector?.(
+        `[data-work-tab-id="${activeWorkTabId}"]`
+      ) as HTMLElement | null;
+
+    if (!activeTabElement) {
+      return;
+    }
+
+    const left =
+      activeTabElement.offsetLeft;
+
+    const right =
+      left +
+      activeTabElement.offsetWidth;
+
+    const visibleLeft =
+      viewport.scrollLeft;
+
+    const visibleRight =
+      visibleLeft +
+      viewport.clientWidth;
+
+    if (right > visibleRight) {
+      viewport.scrollTo({
+        left:
+          right -
+          viewport.clientWidth,
+        behavior: "smooth",
+      });
+      return;
+    }
+
+    if (left < visibleLeft) {
+      viewport.scrollTo({
+        left,
+        behavior: "smooth",
+      });
+    }
+  }, [activeWorkTabId]);
+
+  function renderSavedAPIButton(
+    api: SavedAPIItem
+  ) {
+    return (
+      <div
+        key={api.id}
+        draggable={true}
+        onDragStart={(e) => {
+          e.stopPropagation();
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("application/x-graph-space-api", api.id);
+          e.dataTransfer.setData("text/plain", JSON.stringify({ type: "api", id: api.id }));
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setSelectedSavedAPIId(api.id);
+          setContextMenu({
+            type: "api",
+            api: api,
+            x: event.clientX,
+            y: event.clientY,
+          });
+        }}
+        onClick={() => {
+          setSelectedSavedAPIId(api.id);
+        }}
+        // className={`
+        //   flex w-full items-center gap-1 rounded-[4px] py-1.5 pl-2 pr-2 text-left hover:bg-gray-2/50 cursor-grab active:cursor-grabbing select-none
+        //   ${selectedSavedAPIId === api.id
+        //     ? "bg-gray-2/50"
+        //     : ""
+        //   }
+        // `}
+        className={`
+          group flex w-full items-center gap-1 rounded-[4px] py-1.5 pl-2 pr-2 text-left hover:bg-gray-2/50 cursor-grab active:cursor-grabbing select-none
+          ${selectedSavedAPIId === api.id
+            ? "bg-gray-2/50"
+            : ""
+          }
+        `}
+      >
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center text-white/45">
+          <RxFileTextIcon size={14} />
+        </span>
+        <div className="flex flex-col min-w-0 flex-1">
+          <span className="w-full truncate text-sm font-semibold text-white">
+            {api.name}
+          </span>
+          <span className="w-full truncate text-xs text-white/45">
+            {api.endpoint}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            openSavedAPI(
+              api
+            );
+          }}
+          className="ml-auto inline-flex h-7 shrink-0 items-center rounded-[4px] px-2 text-xs font-semibold text-green-1 opacity-0 transition hover:bg-white/10 group-hover:opacity-100"
+        >
+          View
+        </button>
+      </div>
+    );
+  }
+
+  function renderFolderTree(
+    collection: string,
+    folders: SavedFolderItem[],
+    parentPath = "",
+    depth = 0
+  ): React.ReactNode {
+    return folders.map((folder) => {
+      const path =
+        parentPath
+          ? `${parentPath}/${folder.name}`
+          : folder.name;
+
+      if (
+        !folderHasVisibleContent(
+          collection,
+          folder,
+          path
+        )
+      ) {
+        return null;
+      }
+
+      const apis =
+        getAPIsForFolder(
+          collection,
+          path
+        );
+      const folderKey =
+        `${collection}/${path}`;
+      const expanded =
+        expandedFolders.includes(
+          folderKey
+        );
+      return (
+        <div
+          key={`${collection}-${path}`}
+          className="relative"
+        >
+          <div
+            draggable={true}
+            onDragStart={(e) => {
+              e.stopPropagation();
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData("application/x-graph-space-folder", JSON.stringify({ collection, path }));
+              e.dataTransfer.setData("text/plain", JSON.stringify({ collection, path }));
+            }}
+            onDragEnd={() => {
+              setDragOverTarget(null);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+
+              const rect = e.currentTarget.getBoundingClientRect();
+              const relativeY = e.clientY - rect.top;
+              const height = rect.height;
+
+              let position: "before" | "inside" | "after" = "inside";
+              if (relativeY < height * 0.3) {
+                position = "before";
+              } else if (relativeY > height * 0.7) {
+                position = "after";
+              }
+
+              setDragOverTarget({ collection, path, position });
+            }}
+            onDragLeave={() => {
+              setDragOverTarget(null);
+            }}
+            onDrop={async (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setDragOverTarget(null);
+
+              const rawData = e.dataTransfer.getData("text/plain");
+              if (!rawData) return;
+
+              try {
+                const dragged = JSON.parse(rawData);
+                if (!dragged) return;
+
+                if (dragged.type === "api") {
+                  const apiItem = savedAPIs.find((a) => a.id === dragged.id);
+                  if (apiItem) {
+                    const updatedApi = {
+                      ...apiItem,
+                      collection: collection,
+                      folder: path,
+                    };
+                    await SaveSavedAPI(updatedApi);
+                    await refreshSavedAPIs();
+                  }
+                  return;
+                }
+
+                if (!dragged.collection || !dragged.path) return;
+
+                if (
+                  dragged.collection === collection &&
+                  (path === dragged.path || path.startsWith(dragged.path + "/"))
+                ) {
+                  return;
+                }
+
+                const rect = e.currentTarget.getBoundingClientRect();
+                const relativeY = e.clientY - rect.top;
+                const height = rect.height;
+
+                let position: "before" | "inside" | "after" = "inside";
+                if (relativeY < height * 0.3) {
+                  position = "before";
+                } else if (relativeY > height * 0.7) {
+                  position = "after";
+                }
+
+                await handleMoveFolder(dragged.collection, dragged.path, collection, path, position);
+              } catch (err) {
+                console.error("Failed to parse drag data:", err);
+              }
+            }}
+            onClick={() => {
+              setSelectedCollectionTarget({
+                collection,
+                folder:
+                  path,
+              });
+              toggleExpandedFolder(
+                folderKey
+              );
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setContextMenu({
+                type: "folder",
+                collection,
+                folderPath:
+                  path,
+                name:
+                  folder.name,
+                x:
+                  event.clientX,
+                y:
+                  event.clientY,
+              });
+            }}
+            className={`
+              flex items-center justify-between gap-2 rounded-[4px] px-2 py-2 text-base font-semibold tracking-wide text-white hover:bg-gray-2/50 cursor-pointer
+              ${selectedCollectionTarget.collection === collection &&
+                selectedCollectionTarget.folder === path
+                ? "bg-gray-2/50"
+                : ""
+              }
+              ${dragOverTarget &&
+                dragOverTarget.collection === collection &&
+                dragOverTarget.path === path
+                ? dragOverTarget.position === "inside"
+                  ? "bg-gray-2/50 outline outline-1 outline-green-1"
+                  : dragOverTarget.position === "before"
+                    ? "border-t-2 border-t-green-1"
+                    : "border-b-2 border-b-green-1"
+                : ""
+              }
+            `}
+          >
+            <span className="flex min-w-0 items-center gap-1 truncate">
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                {expanded ? (
+                  <ChevronDown
+                    size={13}
+                    className="text-white"
+                  />
+                ) : (
+                  <ChevronRight
+                    size={13}
+                    className="text-white"
+                  />
+                )}
+              </span>
+              <span className="min-w-0 truncate">{folder.name}</span>
+            </span>
+          </div>
+          {expanded && (
+            <div className="ml-[16px] border-l border-white/10 pl-2">
+              {apis.map(renderSavedAPIButton)}
+              {renderFolderTree(
+                collection,
+                folder.folders ?? [],
+                path,
+                depth + 1
+              )}
+            </div>
+          )}
+        </div>
+      );
+    });
+  }
+
+  function renderSaveFolderPicker(
+    collection: string,
+    folders: SavedFolderItem[],
+    parentPath = "",
+    depth = 0
+  ): React.ReactNode {
+    return folders.map((folder) => {
+      const path =
+        parentPath
+          ? `${parentPath}/${folder.name}`
+          : folder.name;
+      const folderKey =
+        `${collection}/${path}`;
+      const expanded =
+        savePickerExpandedFolders.includes(
+          folderKey
+        );
+      const selected =
+        saveDialogDraft.collection === collection &&
+        saveDialogDraft.folder === path;
+
+      return (
+        <div
+          key={`save-${folderKey}`}
+          className={depth > 0 ? "ml-4 border-l border-white/10 pl-2" : ""}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setSaveDialogDraft((draft) => ({
+                ...draft,
+                collection,
+                folder:
+                  path,
+              }));
+
+              toggleSavePickerFolder(
+                folderKey
+              );
+            }}
+            className={`
+              flex h-7 w-full items-center justify-between gap-2 rounded-[4px] px-2 text-left text-sm
+              ${selected
+                ? "bg-green-1/20 text-white"
+                : "text-white hover:bg-white/10"
+              }
+            `}
+          >
+            <span className="flex min-w-0 items-center gap-1 truncate">
+              {expanded ? (
+                <ChevronDown
+                  size={14}
+                  className="text-white"
+                />
+              ) : (
+                <ChevronRight
+                  size={14}
+                  className="text-white"
+                />
+              )}
+              <span className="min-w-0 truncate">{folder.name}</span>
+            </span>
+            <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-[10px] text-white/45">
+              {getFolderAPICount(
+                collection,
+                folder,
+                path
+              )}
+            </span>
+          </button>
+          {expanded &&
+            renderSaveFolderPicker(
+              collection,
+              folder.folders ?? [],
+              path,
+              depth + 1
+            )}
+        </div>
+      );
+    });
+  }
+
+  function renderSaveLocationPicker() {
+    return (
+      <div className="max-h-[260px] overflow-y-auto rounded-[4px] border border-gray-1/70 bg-black-1 p-1">
+        {savedCollections.length === 0 ? (
+          <div className="px-2 py-5 text-center text-sm text-white/35">
+            No collections
+          </div>
+        ) : (
+          savedCollections.map((collection) => {
+            const expanded =
+              savePickerExpandedCollections.includes(
+                collection.name
+              );
+            const selectedCollection =
+              saveDialogDraft.collection === collection.name &&
+              !saveDialogDraft.folder;
+            return (
+              <div key={`save-${collection.name}`}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSaveDialogDraft((draft) => ({
+                      ...draft,
+                      collection:
+                        collection.name,
+                      folder:
+                        "",
+                    }));
+                    toggleSavePickerCollection(
+                      collection.name
+                    );
+                  }}
+                  className={`
+                    flex h-7 w-full items-center justify-between gap-2 rounded-[4px] px-2 text-left text-sm font-semibold
+                    ${selectedCollection
+                      ? "bg-green-1/20 text-white"
+                      : "text-white hover:bg-white/10"
+                    }
+                  `}
+                >
+                  <span className="flex min-w-0 items-center gap-1 truncate">
+                    {expanded ? (
+                      <ChevronDown
+                        size={14}
+                        className="text-white"
+                      />
+                    ) : (
+                      <ChevronRight
+                        size={14}
+                        className="text-white"
+                      />
+                    )}
+                    <span className="min-w-0 truncate">{collection.name}</span>
+                  </span>
+                  <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-[10px] text-white/45">
+                    {getCollectionAPICount(
+                      collection.name
+                    )}
+                  </span>
+                </button>
+                {expanded &&
+                  renderSaveFolderPicker(
+                    collection.name,
+                    collection.folders ?? []
+                  )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    );
+  }
+
+  function renderWorkTab(
+    tab: WorkspaceTab
+  ) {
+    const isActive =
+      tab.id ===
+      activeWorkTabId;
+
+    return (
+      <div
+        key={tab.id}
+        data-work-tab-id={tab.id}
+        role="button"
+        tabIndex={0}
+        onClick={() =>
+          selectWorkTab(
+            tab.id
+          )
+        }
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setTabContextMenu({
+            tabId:
+              tab.id,
+            x:
+              event.clientX,
+            y:
+              event.clientY,
+          });
+        }}
+        onKeyDown={(event) => {
+          if (
+            event.key ===
+            "Enter" ||
+            event.key ===
+            " "
+          ) {
+            event.preventDefault();
+            selectWorkTab(
+              tab.id
+            );
+          }
+        }}
+        className={`
+          relative group flex h-[43px] w-[150px] max-w-[150px] items-center gap-2
+          cursor-default border-r border-r-gray-2 last:border-r-0 px-3 text-left text-sm transition-colors
+          ${isActive
+            ? "bg-black-1 text-white"
+            : "bg-black-2 text-white/55 hover:bg-black-1/70 hover:text-white/85"
+          }
+        `}
+      >
+        {isActive && (
+          <div className="absolute top-0 left-0 right-0 h-[3px] bg-green-1" />
+        )}
+        <span className="min-w-0 flex-1 truncate">
+          {tab.title}
+        </span>
+        {tab.pinned ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              togglePinWorkTab(
+                tab.id
+              );
+            }}
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px] text-green-1 transition hover:bg-white/10"
+            title="Unpin"
+          >
+            <Pin size={13} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              closeWorkTab(
+                tab.id
+              );
+            }}
+            className="
+              relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px]
+              text-white/35 transition hover:bg-white/10 hover:text-white
+            "
+            aria-label={`Close ${tab.title}`}
+          >
+            {tab.isDirty && (
+              <span className="absolute h-2 w-2 rounded-full bg-green-1 transition-opacity group-hover:opacity-0" />
+            )}
+            <X
+              size={13}
+              className={`
+                transition-opacity
+                ${tab.isDirty
+                  ? "opacity-0 group-hover:opacity-100"
+                  : isActive
+                    ? "opacity-70 group-hover:opacity-100"
+                    : "opacity-0 group-hover:opacity-100"
+                }
+              `}
+            />
+          </button>
+        )}
+      </div>
+    );
+  }
+
 
   return (
     <div className='w-full flex-1 flex min-h-0'>
       {/* left menu */}
       <div className='w-[50px] h-full bg-black-1 border-r border-r-gray-2 flex flex-col items-center'>
-        <div className='w-full border-l-[3px] border-l-green-1 h-[48px] flex justify-center items-center'>
+        <button
+          type="button"
+          onClick={() => {
+            setSidebarMode("documentation");
+            setActiveSavedAPI(null);
+          }}
+          className={`w-full h-[48px] flex justify-center items-center border-l-[3px] ${sidebarMode === "documentation" || sidebarMode === "saved-api"
+            ? "border-l-green-1"
+            : "border-l-transparent"
+            }`}
+        >
           <RxFileTextIcon size={28} className='mr-1 text-white/80' />
-        </div>
-        <div className='w-full h-[48px] flex justify-center items-center'>
-          <BiCollectionIcon size={28} className='mr-1 text-white/30' />
-        </div>
-        <div className='w-full h-[48px] flex justify-center items-center'>
-          <CiCloudOnIcon strokeWidth={0.5} size={28} className='mr-1 text-white/30' />
-        </div>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setSidebarMode("collections");
+            setActiveSavedAPI(null);
+            refreshSavedAPIs();
+          }}
+          className={`w-full h-[48px] flex justify-center items-center border-l-[3px] ${sidebarMode === "collections"
+            ? "border-l-green-1"
+            : "border-l-transparent"
+            }`}
+        >
+          <BiCollectionIcon size={28} className={`mr-1 ${sidebarMode === "collections"
+            ? "text-white/80"
+            : "text-white/30"
+            }`} />
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            if (cloudSyncState.status === "pull_available") {
+              pullFromGoogleDrive();
+              return;
+            }
+            setCloudDialogOpen(true);
+            setCloudSettingsOpen(
+              !googleConfig.clientId ||
+              !googleConfig.clientSecretSet
+            );
+            refreshCloudState();
+            refreshGoogleConfig();
+          }}
+          className='w-full h-[48px] flex justify-center items-center'
+          title={cloudSyncState.message || "Google Drive sync"}
+        >
+          {renderCloudIcon()}
+        </button>
       </div>
       {/* body */}
       <Group orientation="horizontal" className="h-full min-h-0">
         <Panel defaultSize={"350px"} minSize={"280px"} className='flex flex-col min-h-0'>
           <div className="flex-1 bg-black-1 flex flex-col min-h-0">
-            <div className='p-2.5'>
-              <div className='w-full rounded-md outline outline-1 outline-gray-1/50 bg-gray-3 flex pl-2 gap-0.5'>
-                <div className={`w-2.5 h-2.5 min-w-2.5 min-h-2.5 rounded-full my-auto ${
-                  schemaStatus === "error"
+            <div className={`${sidebarMode === "collections" ? '' : 'p-2.5'}`}>
+              {sidebarMode === "saved-api" &&
+                activeSavedAPI && (
+                  <div className="mb-2 flex min-w-0 items-center gap-2 text-left">
+                    <button
+                      type="button"
+                      onClick={backToDocumentation}
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[4px] text-white/65 hover:bg-white/10 hover:text-white"
+                    >
+                      <ArrowRight
+                        size={18}
+                        className="rotate-180"
+                      />
+                    </button>
+                    <span className="min-w-0 truncate text-sm font-semibold text-white/85">
+                      {activeSavedAPI.name}
+                    </span>
+                  </div>
+                )}
+              {sidebarMode !== "collections" && (
+                <div className='w-full rounded-md outline outline-1 outline-gray-1/50 bg-gray-3 flex pl-2 gap-0.5'>
+                  <div className={`w-2.5 h-2.5 min-w-2.5 min-h-2.5 rounded-full my-auto ${schemaStatus === "error"
                     ? "bg-red-500"
                     : "bg-green-1"
-                }`}></div>
-                <input value={lastEndpoint} onChange={e => { dispatch(setEndpoint(e.target.value)) }} spellCheck={false} className='w-full rounded-sm p-2 bg-gray-3 outline-none' placeholder='Enter URL' />
+                    }`}></div>
+                  <div className="relative min-w-0 flex-1">
+                    <div className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre rounded-sm p-2 font-inherit text-white">
+                      {lastEndpoint
+                        ? renderHighlightedEnvironmentText(lastEndpoint)
+                        : <span className="text-white/30">Enter URL</span>}
+                    </div>
+                    <input
+                      value={lastEndpoint}
+                      onChange={e => { dispatch(setEndpoint(e.target.value)) }}
+                      spellCheck={false}
+                      list="environment-variable-options"
+                      className='relative w-full rounded-sm p-2 bg-transparent text-transparent caret-white outline-none'
+                      placeholder='Enter URL'
+                    />
+                  </div>
+                  <datalist id="environment-variable-options">
+                    {environmentVariables.map((variable) => (
+                      <option key={variable.id} value={`{{${variable.key}}}`} />
+                    ))}
+                  </datalist>
+                </div>
+              )}
+            </div>
+            {sidebarMode === "documentation" && (
+              <div className='relative w-full flex justify-between mt-3 px-2.5'>
+                <p className='text-lg my-auto leading-4 font-semibold'>Documentation</p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDocumentationSearchOpen(
+                      true
+                    )
+                  }
+                  className="
+                    inline-flex h-8 w-8 items-center justify-center rounded-[4px]
+                    text-white/70 transition-colors hover:bg-white/10 hover:text-white
+                  "
+                >
+                  <Search strokeWidth={2} size={20} />
+                </button>
               </div>
-            </div>
-            <div className='relative w-full flex justify-between mt-3 px-2.5'>
-              <p className='text-lg my-auto leading-4 font-semibold'>Documentation</p>
-              <button
-                type="button"
-                onClick={() =>
-                  setDocumentationSearchOpen(
-                    true
-                  )
-                }
-                className="
-                  inline-flex h-8 w-8 items-center justify-center rounded-[4px]
-                  text-white/70 transition-colors hover:bg-white/10 hover:text-white
-                "
-              >
-                <Search strokeWidth={2} size={20} />
-              </button>
-            </div>
+            )}
+            {sidebarMode === "collections" && (
+              <div className="px-2.5 pt-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-lg font-semibold leading-4">Collections</p>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={importCollection}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] bg-white/10 text-white/70 hover:bg-white/15 hover:text-white"
+                      title="Import collection"
+                    >
+                      <Upload size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCollectionDialog({
+                          open: true,
+                          mode: "create",
+                          oldName: "",
+                          name: "",
+                        })
+                      }
+                      className="inline-flex h-8 items-center gap-1 rounded-[4px] bg-white/10 px-2 text-base -mt-1 font-semibold text-white/70 hover:bg-white/15 hover:text-white"
+                    >
+                      <Plus size={14} />
+                      Collection
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 flex h-9 items-center gap-2 mb-2 rounded-md outline outline-1 outline-gray-1/50 bg-gray-3 px-2">
+                  <Search size={16} className="text-white/35" />
+                  <input
+                    value={collectionSearchKeyword}
+                    onChange={(event) =>
+                      setCollectionSearchKeyword(
+                        event.target.value
+                      )
+                    }
+                    spellCheck={false}
+                    className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-white/30"
+                    placeholder="Search API, folder, collection"
+                  />
+                </div>
+                <div>
+                  <datalist id="collection-tab-options">
+                    {existingCollections.map((collection) => (
+                      <option
+                        key={collection}
+                        value={collection}
+                      />
+                    ))}
+                  </datalist>
+                  <datalist id="folder-tab-options">
+                    {existingFolders.map((folder) => (
+                      <option
+                        key={folder}
+                        value={folder}
+                      />
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+            )}
             {documentationSearchOpen && (
               <div
                 className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-5"
@@ -5667,6 +8954,7 @@ const Home: React.FC = () => {
                     {([
                       "Query",
                       "Mutation",
+                      "Subscription",
                     ] as const).map(
                       (operationType) => {
                         const results =
@@ -5720,31 +9008,32 @@ const Home: React.FC = () => {
                 </div>
               </div>
             )}
-            <div className="flex flex-wrap items-center gap-1 my-3 text-lg px-1 text-wrap wrap-break-word gap-y-0">
-              {stack.map(
-                (
-                  item,
-                  index
-                ) => (
-                  <React.Fragment
-                    key={
-                      index
-                    }
-                  >
-                    {index >
-                      0 && (
-                        <span className="text-[#475569]">
-                          /
-                        </span>
-                      )}
-
-                    <button
-                      onClick={() =>
-                        goToBreadcrumb(
-                          index
-                        )
+            {sidebarMode !== "collections" && (
+              <div className="flex flex-wrap items-center gap-1 my-3 text-lg px-1 text-wrap wrap-break-word gap-y-0">
+                {stack.map(
+                  (
+                    item,
+                    index
+                  ) => (
+                    <React.Fragment
+                      key={
+                        index
                       }
-                      className={`
+                    >
+                      {index >
+                        0 && (
+                          <span className="text-[#475569]">
+                            /
+                          </span>
+                        )}
+
+                      <button
+                        onClick={() =>
+                          goToBreadcrumb(
+                            index
+                          )
+                        }
+                        className={`
                         px-1.5
                         rounded
                         text-green-1
@@ -5752,21 +9041,193 @@ const Home: React.FC = () => {
                         hover:bg-[#ffffff10]
                         text-wrap wrap-break-word truncate
                       `}
-                    >
-                      {item.fieldName ??
-                        item.typeName}
-                    </button>
-                  </React.Fragment>
-                )
-              )}
-            </div>
+                      >
+                        {item.fieldName ??
+                          item.typeName}
+                      </button>
+                    </React.Fragment>
+                  )
+                )}
+              </div>
+            )}
             <div className='relative flex-1 flex flex-col min-h-0 !overflow-y-clip bg-black-1'>
-              {
-                !currentType &&
-                  <div className='w-full min-h-0'>
-                    {
-                      ("Query" in explorerSchema) &&
-                        <FieldGroup onClick={() => openRootType("Query")} className="w-full px-2.5 py-1 border-dashed border-t border-t-gray-1 hover:bg-gray-2/30 group">
+              {sidebarMode === "collections" && (
+                <OverlayScrollbarsComponent
+                  className='w-full min-h-0 flex-1 bg-black-1'
+                  options={overlayScrollOptions}
+                  defer
+                >
+                  <div className="px-2.5 pb-4 text-left">
+                    {savedCollections.length === 0 ? (
+                      <div className="py-8 text-center text-sm text-white/35">
+                        No saved APIs
+                      </div>
+                    ) : (
+                      savedCollections.map(
+                        (collection) => {
+                          const rootAPIs =
+                            getAPIsForFolder(
+                              collection.name,
+                              ""
+                            );
+                          const visibleFolders =
+                            (collection.folders ?? []).filter((folder) =>
+                              folderHasVisibleContent(
+                                collection.name,
+                                folder,
+                                folder.name
+                              )
+                            );
+                          const visible =
+                            collectionOrFolderMatchesSearch(collection.name) ||
+                            rootAPIs.length > 0 ||
+                            visibleFolders.length > 0;
+
+                          if (!visible) {
+                            return null;
+                          }
+
+                          const isExpanded =
+                            expandedCollections.includes(
+                              collection.name
+                            );
+                          return (
+                            <div
+                              key={collection.name}
+                              className="pt-0"
+                            >
+                              <div
+                                onClick={() => {
+                                  setSelectedCollectionTarget({
+                                    collection:
+                                      collection.name,
+                                    folder:
+                                      "",
+                                  });
+                                  toggleExpandedCollection(
+                                    collection.name
+                                  );
+                                }}
+                                onContextMenu={(event) => {
+                                  event.preventDefault();
+                                  setContextMenu({
+                                    type: "collection",
+                                    collection:
+                                      collection.name,
+                                    x:
+                                      event.clientX,
+                                    y:
+                                      event.clientY,
+                                  });
+                                }}
+                                onDragOver={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+
+                                  if (e.dataTransfer.types.includes("application/x-graph-space-api")) {
+                                    return;
+                                  }
+
+                                  setDragOverTarget({
+                                    collection: collection.name,
+                                    path: "",
+                                    position: "inside",
+                                  });
+                                }}
+                                onDragLeave={() => {
+                                  setDragOverTarget(null);
+                                }}
+                                onDrop={async (e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setDragOverTarget(null);
+
+                                  const rawData = e.dataTransfer.getData("text/plain");
+                                  if (!rawData) return;
+
+                                  try {
+                                    const dragged = JSON.parse(rawData);
+                                    if (!dragged) return;
+
+                                    if (dragged.type === "api") {
+                                      return; // Do not allow dropping API on collection roots!
+                                    }
+
+                                    if (!dragged.collection || !dragged.path) return;
+
+                                    await handleMoveFolder(
+                                      dragged.collection,
+                                      dragged.path,
+                                      collection.name,
+                                      "",
+                                      "inside"
+                                    );
+                                  } catch (err) {
+                                    console.error("Failed to parse drag data:", err);
+                                  }
+                                }}
+                                className={`
+                                flex items-center justify-between gap-2 rounded-[4px] px-1 py-2 text-base font-semibold tracking-wide text-white hover:bg-gray-2/50 cursor-pointer
+                                ${selectedCollectionTarget.collection === collection.name &&
+                                    selectedCollectionTarget.folder === ""
+                                    ? "bg-gray-2/50"
+                                    : ""
+                                  }
+                                ${dragOverTarget &&
+                                    dragOverTarget.collection === collection.name &&
+                                    dragOverTarget.path === "" &&
+                                    dragOverTarget.position === "inside"
+                                    ? "bg-gray-2/50 outline outline-1 outline-green-1"
+                                    : ""
+                                  }
+                              `}
+                              >
+                                <span className="flex min-w-0 items-center gap-1 truncate">
+                                  <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                                    {isExpanded ? (
+                                      <ChevronDown
+                                        size={15}
+                                        className="text-white"
+                                      />
+                                    ) : (
+                                      <ChevronRight
+                                        size={15}
+                                        className="text-white"
+                                      />
+                                    )}
+                                  </span>
+                                  <span className="min-w-0 truncate">
+                                    {collection.name}
+                                  </span>
+                                </span>
+                              </div>
+                              {isExpanded && (
+                                <div className="ml-[12px] border-l border-white/10 pl-2">
+                                  {rootAPIs.map(
+                                    renderSavedAPIButton
+                                  )}
+                                  {renderFolderTree(
+                                    collection.name,
+                                    visibleFolders
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+                      )
+                    )}
+                  </div>
+                </OverlayScrollbarsComponent>
+              )}
+              {sidebarMode !== "collections" && (
+                <>
+                  {
+                    !currentType &&
+                    <div className='w-full min-h-0'>
+                      {
+                        ("Query" in explorerSchema) &&
+                        <FieldGroup onClick={() => openRootType("Query")} className="w-full px-2.5 py-1 border-dashed border-t border-t-gray-1 hover:bg-gray-2/50 group">
                           <Field orientation="horizontal">
                             <Checkbox
                               checked={rootOperations.query}
@@ -5780,10 +9241,10 @@ const Home: React.FC = () => {
                             </FieldLabel>
                           </Field>
                         </FieldGroup>
-                    }
-                    {
-                      ("Mutation" in explorerSchema) &&
-                        <FieldGroup onClick={() => openRootType("Mutation")} className="w-full px-2.5 py-1 border-dashed border-t border-t-gray-1 hover:bg-gray-2/30 group">
+                      }
+                      {
+                        ("Mutation" in explorerSchema) &&
+                        <FieldGroup onClick={() => openRootType("Mutation")} className="w-full px-2.5 py-1 border-dashed border-t border-t-gray-1 hover:bg-gray-2/50 group">
                           <Field orientation="horizontal">
                             <Checkbox
                               checked={rootOperations.mutation}
@@ -5801,200 +9262,224 @@ const Home: React.FC = () => {
                             </FieldLabel>
                           </Field>
                         </FieldGroup>
-                    }
-                  </div>
-              }
-              {showOperationInfo && (
-                <div className="mb-8">
-                  {/* operation name */}
-                  <div className="flex ml-3 items-start text-left gap-3 mt-2">
-                    <Checkbox
-                      checked={
-                        !!selectedField &&
-                        selectionExistsInActiveOperation(
-                          selectedField.name,
-                          [],
-                          selectedField.name
-                        )
                       }
-                      onCheckedChange={(checked) => {
-                        if (selectedField) {
-                          handleFieldClick(
-                            selectedField.name,
-                            [],
-                            selectedField,
-                            checked === true
-                          );
-                        }
-                      }}
-                      strokeWidth={5} id="mutations" name="mutations" className='data-[state=checked]:bg-green-1/70 w-5 h-5 my-auto transition-none! border-white/50 text-white/80 text-lg text-bold!'
-                    />
-                    <div className="min-w-0 text-lg flex flex-wrap gap-y-0 gap-2 font-semibold text-white break-words">
-                      <span className="min-w-0 break-all">
-                        {
-                          selectedField.name
-                        }:
-                      </span>
-                      <div className="min-w-0 text-lg text-[#5B8DBD] break-all">
-                        {
-                          selectedField.type
-                        }
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* description */}
-                  {selectedField.description && (
-                    <div className="mt-2 text-sm text-[#94a3b8]">
                       {
-                        selectedField.description
+                        ("Subscription" in explorerSchema) &&
+                        <FieldGroup onClick={() => openRootType("Subscription")} className="w-full px-2.5 py-1 border-dashed border-t border-t-gray-1 hover:bg-gray-2/50 group">
+                          <Field orientation="horizontal">
+                            <Checkbox
+                              checked={rootOperations.subscription}
+                              onCheckedChange={(checked) => {
+                                setRootOperation("subscription", !!checked);
+
+                                if (checked) {
+                                  setCurrentType("Subscription");
+                                }
+                              }}
+                              strokeWidth={5} id="subscriptions" name="subscriptions" className='data-[state=checked]:bg-green-1/70 w-5 h-5 transition-none! border-white/50 text-white/80 text-lg text-bold!' />
+                            <FieldLabel className='w-full flex justify-between'>
+                              <p className='-ml-2 text-lg font-medium text-nowrap overflow-hidden'>subscription: <span className='text-[#5B8DBD]'>Subscription</span></p>
+                              <ArrowRight size={20} className='group-hover:block hidden' />
+                            </FieldLabel>
+                          </Field>
+                        </FieldGroup>
                       }
+                    </div>
+                  }
+                  {showOperationInfo && (
+                    <div className="mb-8">
+                      {/* operation name */}
+                      <div className="flex ml-3 items-start text-left gap-3 mt-2">
+                        <Checkbox
+                          checked={
+                            !!selectedField &&
+                            selectionExistsInActiveOperation(
+                              selectedField.name,
+                              [],
+                              selectedField.name
+                            )
+                          }
+                          onCheckedChange={(checked) => {
+                            if (selectedField) {
+                              handleFieldClick(
+                                selectedField.name,
+                                [],
+                                selectedField,
+                                checked === true
+                              );
+                            }
+                          }}
+                          strokeWidth={5} id="mutations" name="mutations" className='data-[state=checked]:bg-green-1/70 w-5 h-5 my-auto transition-none! border-white/50 text-white/80 text-lg text-bold!'
+                        />
+                        <div className="min-w-0 text-lg flex flex-wrap gap-y-0 gap-2 font-semibold text-white break-words">
+                          <span className="min-w-0 break-all">
+                            {
+                              selectedField.name
+                            }:
+                          </span>
+                          <div className="min-w-0 text-lg text-[#5B8DBD] break-all">
+                            {
+                              selectedField.type
+                            }
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* description */}
+                      {selectedField.description && (
+                        <div className="mt-2 text-sm text-[#94a3b8]">
+                          {
+                            selectedField.description
+                          }
+                        </div>
+                      )}
+
+                      {/* args */}
+                      <div className="mt-5">
+                        <div className="text-lg ml-3 font-bold text-left tracking-wide text-white mb-2">
+                          Arguments
+                        </div>
+
+                        {selectedField.args
+                          .length ===
+                          0 ? (
+                          <div className="text-base text-[#64748b]">
+                            No arguments
+                          </div>
+                        ) : (
+                          <div>
+                            {selectedField.args.map(
+                              (
+                                arg
+                              ) => (
+                                <FieldGroup key={arg.name} className="w-full px-2.5 py-1 border-dashed border-t border-t-gray-1 hover:bg-gray-2/50 group">
+                                  <Field orientation="horizontal">
+                                    <div onClick={(event) => event.stopPropagation()}>
+                                      <Checkbox
+                                        checked={
+                                          !!selectedField &&
+                                          rootArgumentExistsInActiveOperation(
+                                            selectedField.name,
+                                            arg.name
+                                          )
+                                        }
+                                        onCheckedChange={(checked) => {
+                                          if (!selectedField) {
+                                            return;
+                                          }
+
+                                          handleArgumentClick(
+                                            selectedField,
+                                            arg.name,
+                                            checked === true
+                                          );
+                                        }}
+                                        strokeWidth={5} id={`arg-${selectedField.name}-${arg.name}`} name={`arg-${selectedField.name}-${arg.name}`} className='data-[state=checked]:bg-green-1/70 w-5 h-5 transition-none! border-white/50 text-white/80 text-lg text-bold!'
+                                      />
+                                    </div>
+                                    <FieldLabel className='w-full min-w-0 text-left'>
+                                      <div className='min-w-0 text-left'>
+                                        <p className='text-lg font-medium whitespace-normal break-words'>
+                                          {arg.name}: <span className='text-[#5B8DBD]'>{arg.type}</span>
+                                          <span className='text-[#feba99]'> = {formatExplorerArgumentDefaultDisplay(arg)}</span>
+                                        </p>
+                                        {arg.description && (
+                                          <p className='mt-0.5 text-sm leading-5 text-[#94a3b8] whitespace-normal break-words'>
+                                            {arg.description}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </FieldLabel>
+                                  </Field>
+                                </FieldGroup>
+                              )
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
-
-                  {/* args */}
-                  <div className="mt-5">
-                    <div className="text-lg ml-3 font-bold text-left tracking-wide text-white mb-2">
-                      Arguments
-                    </div>
-
-                    {selectedField.args
-                      .length ===
-                      0 ? (
-                      <div className="text-base text-[#64748b]">
-                        No arguments
+                  {
+                    currentType &&
+                    <OverlayScrollbarsComponent
+                      ref={scrollRef}
+                      className='w-full min-h-0 flex-1 bg-black-1'
+                      options={overlayScrollOptions}
+                      defer
+                    >
+                      <div className="ml-2.5 text-lg font-bold text-left tracking-wide text-white mb-2">
+                        Fields
                       </div>
-                    ) : (
-                      <div>
-                        {selectedField.args.map(
-                          (
-                            arg
-                          ) => (
-                            <FieldGroup key={arg.name} className="w-full px-2.5 py-1 border-dashed border-t border-t-gray-1 hover:bg-gray-2/30 group">
+                      {
+                        filteredFields.map((field) => {
+                          const expandable =
+                            field.kind ===
+                            "object" ||
+                            field.kind ===
+                            "interface" ||
+                            field.kind ===
+                            "union";
+                          const isRootType =
+                            currentType === "Query" ||
+                            currentType === "Mutation" ||
+                            currentType === "Subscription";
+                          const rootFieldName =
+                            isRootType
+                              ? field.name
+                              : stack[2]?.fieldName;
+                          const targetPath =
+                            isRootType
+                              ? []
+                              : stack.slice(3).map((s) => s.fieldName!).filter(Boolean);
+                          const checked =
+                            !!rootFieldName &&
+                            selectionExistsInActiveOperation(
+                              rootFieldName,
+                              targetPath,
+                              field.name
+                            );
+                          return (
+                            <FieldGroup key={field.name} onClick={() => openField(field)} className="w-full px-2.5 py-1 border-dashed border-t border-t-gray-1 hover:bg-gray-2/50 group">
                               <Field orientation="horizontal">
                                 <div onClick={(event) => event.stopPropagation()}>
                                   <Checkbox
-                                    checked={
-                                      !!selectedField &&
-                                      rootArgumentExistsInActiveOperation(
-                                        selectedField.name,
-                                        arg.name
-                                      )
-                                    }
-                                    onCheckedChange={(checked) => {
-                                      if (!selectedField) {
+                                    checked={checked}
+                                    onCheckedChange={(nextChecked) => {
+                                      if (!rootFieldName) {
                                         return;
                                       }
 
-                                      handleArgumentClick(
-                                        selectedField,
-                                        arg.name,
-                                        checked === true
+                                      handleFieldClick(
+                                        rootFieldName,
+                                        targetPath,
+                                        field,
+                                        nextChecked === true
                                       );
                                     }}
-                                    strokeWidth={5} id={`arg-${selectedField.name}-${arg.name}`} name={`arg-${selectedField.name}-${arg.name}`} className='data-[state=checked]:bg-green-1/70 w-5 h-5 transition-none! border-white/50 text-white/80 text-lg text-bold!' 
+                                    strokeWidth={5} id={`field-${currentType}-${field.name}`} name={`field-${currentType}-${field.name}`} className='data-[state=checked]:bg-green-1/70 w-5 h-5 transition-none! border-white/50 text-white/80 text-lg text-bold!'
                                   />
                                 </div>
-                                <FieldLabel className='w-full min-w-0 text-left'>
+                                <FieldLabel className='w-full min-w-0 flex justify-between gap-2 text-left'>
                                   <div className='min-w-0 text-left'>
-                                    <p className='text-lg font-medium whitespace-normal break-words'>
-                                      {arg.name}: <span className='text-[#5B8DBD]'>{arg.type}</span>
-                                      <span className='text-[#feba99]'> = {formatExplorerArgumentDefaultDisplay(arg)}</span>
-                                    </p>
-                                    {arg.description && (
+                                    <p className='text-lg font-medium text-nowrap overflow-hidden truncate'>{field.name}: <span className='text-[#5B8DBD]'>{field.type}</span></p>
+                                    {field.description && (
                                       <p className='mt-0.5 text-sm leading-5 text-[#94a3b8] whitespace-normal break-words'>
-                                        {arg.description}
+                                        {field.description}
                                       </p>
                                     )}
                                   </div>
+                                  {expandable && <ArrowRight size={20} className='group-hover:block hidden shrink-0 mt-1' />}
                                 </FieldLabel>
                               </Field>
                             </FieldGroup>
                           )
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-              {
-                currentType &&
-                  <OverlayScrollbarsComponent
-                    ref={scrollRef}
-                    className='w-full min-h-0 flex-1 bg-black-1'
-                    options={overlayScrollOptions}
-                    defer
-                  >
-                    <div className="ml-2.5 text-lg font-bold text-left tracking-wide text-white mb-2">
-                      Fields
-                    </div>
-                    {
-                      filteredFields.map((field) => {
-                        const expandable =
-                          field.kind ===
-                          "object" ||
-                          field.kind ===
-                          "interface" ||
-                          field.kind ===
-                          "union";
-                        const isRootType =
-                          currentType === "Query" ||
-                          currentType === "Mutation";
-                        const rootFieldName =
-                          isRootType
-                            ? field.name
-                            : stack[2]?.fieldName;
-                        const targetPath =
-                          isRootType
-                            ? []
-                            : stack.slice(3).map((s) => s.fieldName!).filter(Boolean);
-                        const checked =
-                          !!rootFieldName &&
-                          selectionExistsInActiveOperation(
-                            rootFieldName,
-                            targetPath,
-                            field.name
-                          );
-                        return (
-                          <FieldGroup key={field.name} onClick={() => openField( field )} className="w-full px-2.5 py-1 border-dashed border-t border-t-gray-1 hover:bg-gray-2/30 group">
-                            <Field orientation="horizontal">
-                              <div onClick={(event) => event.stopPropagation()}>
-                                <Checkbox
-                                  checked={checked}
-                                  onCheckedChange={(nextChecked) => {
-                                    if (!rootFieldName) {
-                                      return;
-                                    }
+                        })
+                      }
+                    </OverlayScrollbarsComponent>
+                  }
 
-                                    handleFieldClick(
-                                      rootFieldName,
-                                      targetPath,
-                                      field,
-                                      nextChecked === true
-                                    );
-                                  }}
-                                  strokeWidth={5} id={`field-${currentType}-${field.name}`} name={`field-${currentType}-${field.name}`} className='data-[state=checked]:bg-green-1/70 w-5 h-5 transition-none! border-white/50 text-white/80 text-lg text-bold!' 
-                                />
-                              </div>
-                              <FieldLabel className='w-full min-w-0 flex justify-between gap-2 text-left'>
-                                <div className='min-w-0 text-left'>
-                                  <p className='text-lg font-medium text-nowrap overflow-hidden truncate'>{field.name}: <span className='text-[#5B8DBD]'>{field.type}</span></p>
-                                  {field.description && (
-                                    <p className='mt-0.5 text-sm leading-5 text-[#94a3b8] whitespace-normal break-words'>
-                                      {field.description}
-                                    </p>
-                                  )}
-                                </div>
-                                { expandable && <ArrowRight size={20} className='group-hover:block hidden shrink-0 mt-1' /> }
-                              </FieldLabel>
-                            </Field>
-                          </FieldGroup>
-                        )
-                      })
-                    }
-                  </OverlayScrollbarsComponent>
-              }
-              
+                </>
+              )}
             </div>
           </div>
         </Panel>
@@ -6027,7 +9512,132 @@ const Home: React.FC = () => {
         </Separator>
 
         <Panel minSize={"350px"} className='flex flex-col min-h-0'>
-          <div className="bg-black-2 h-[50px]">Cột phải</div>
+          <div className="bg-black-2 h-[43px] shrink-0 flex items-center justify-between overflow-hidden">
+            <div className="flex-1 min-w-0 h-full flex items-end">
+              {workTabs.filter((tab) => tab.pinned).map(renderWorkTab)}
+              <OverlayScrollbarsComponent
+                ref={tabScrollRef}
+                className="min-w-0 max-w-fit h-full"
+                options={tabScrollOptions}
+                defer
+              >
+                <div className="flex h-full min-w-max items-end">
+                  {workTabs.filter((tab) => !tab.pinned).map(renderWorkTab)}
+                </div>
+              </OverlayScrollbarsComponent>
+              <button
+                type="button"
+                onClick={addWorkTab}
+                className="
+                 border-l border-l-gray-2 flex h-[43px] w-[43px] shrink-0 items-center justify-center
+                  text-white/55 transition-colors
+                "
+                title="New tab"
+              >
+                <Plus size={17} />
+              </button>
+            </div>
+
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() =>
+                  setEnvironmentMenuOpen((open) => !open)
+                }
+                className="flex items-center gap-1.5 px-3 h-[40px] text-white bg-black-1 border-l border-l-gray-2 transition-colors cursor-pointer select-none shrink-0"
+              >
+                <Settings size={16} />
+                <span className="max-w-[170px] truncate text-sm font-medium">
+                  {activeEnvironment?.name || "No environment"}
+                </span>
+                <ChevronDown size={14} className="opacity-70 mt-[1px]" />
+              </button>
+              {environmentMenuOpen && (
+                <div className="fixed right-3 top-[94px] z-[120] w-[350px] rounded-[4px] border border-gray-1 bg-black-2 text-left shadow-2xl">
+                  <div className="flex h-9 items-center border-b border-gray-2">
+                    <input
+                      autoFocus
+                      value={environmentSearch}
+                      onChange={(event) => setEnvironmentSearch(event.target.value)}
+                      className="min-w-0 flex-1 bg-transparent px-3 text-sm text-white outline-none placeholder:text-white/35"
+                      placeholder="Search"
+                    />
+                    <button
+                      type="button"
+                      onClick={createEnvironment}
+                      className="flex h-full w-10 items-center justify-center border-l border-gray-2 text-white/55 hover:bg-white/10 hover:text-white"
+                      title="New environment"
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </div>
+                  <div className="max-h-[260px] overflow-y-auto p-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        persistEnvironmentStore({
+                          ...environmentStore,
+                          activeEnvironmentId: "",
+                        });
+                        setEnvironmentMenuOpen(false);
+                      }}
+                      className={`flex w-full items-center gap-2 rounded-[4px] px-2 py-2 text-sm hover:bg-white/10 ${
+                        !environmentStore.activeEnvironmentId ? "bg-white/10 text-white" : "text-white/60"
+                      }`}
+                    >
+                      <span className="w-4">{!environmentStore.activeEnvironmentId ? <Check size={14} /> : null}</span>
+                      No environment
+                    </button>
+                    {environmentStore.environments
+                      .filter((environment) =>
+                        environment.name.toLowerCase().includes(environmentSearch.trim().toLowerCase())
+                      )
+                      .map((environment) => (
+                        <div key={environment.id} className="group flex items-center rounded-[4px] hover:bg-white/10">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              persistEnvironmentStore({
+                                ...environmentStore,
+                                activeEnvironmentId: environment.id,
+                              });
+                              setEnvironmentMenuOpen(false);
+                            }}
+                            className={`flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-sm ${
+                              environmentStore.activeEnvironmentId === environment.id ? "text-white" : "text-white/70"
+                            }`}
+                          >
+                            <span className="w-4">{environmentStore.activeEnvironmentId === environment.id ? <Check size={14} /> : null}</span>
+                            <span className="truncate">{environment.name}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingEnvironmentId(environment.id);
+                              setEnvironmentEditorOpen(true);
+                              setEnvironmentMenuOpen(false);
+                            }}
+                            className="mr-1 hidden h-7 w-7 items-center justify-center rounded-[4px] text-white/45 hover:bg-white/10 hover:text-white group-hover:flex"
+                            title="Edit"
+                          >
+                            <Edit3 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+                  <div className="flex items-center justify-end gap-1 border-t border-gray-2 p-2">
+                    <button type="button" onClick={importEnvironmentStore} className="rounded-[4px] px-2 py-1 text-xs font-semibold text-white/60 hover:bg-white/10 hover:text-white">
+                      Import
+                    </button>
+                    <button type="button" onClick={exportEnvironmentStore} className="rounded-[4px] px-2 py-1 text-xs font-semibold text-white/60 hover:bg-white/10 hover:text-white">
+                      Export
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          {activeWorkTab && (
           <Group orientation="horizontal" className="flex-1 min-h-0">
             <Panel defaultSize={"50%"} minSize={"300px"} className='min-h-0'>
               <Group orientation="vertical" className="h-full min-h-0">
@@ -6041,21 +9651,32 @@ const Home: React.FC = () => {
                       <button
                         type="button"
                         disabled={
-                          !canRunOperation ||
+                          (!canRunOperation &&
+                            !activeWorkTab.subscriptionListening) ||
                           isRunningOperation
                         }
                         onClick={runActiveOperation}
+                        onMouseEnter={() => setIsRunButtonHovered(true)}
+                        onMouseLeave={() => setIsRunButtonHovered(false)}
                         className={`
-                          inline-flex items-center gap-2 rounded-[4px] px-4 py-1
+                          inline-flex items-center gap-2 rounded-[4px] max-w-[118px] min-w-[85px] px-4 pl-3 py-1
                           font-semibold transition-colors
-                          ${canRunOperation && !isRunningOperation
-                            ? "bg-green-1/70 text-white hover:bg-green-1 cursor-pointer"
+                          ${(canRunOperation || activeWorkTab.subscriptionListening) && !isRunningOperation
+                            ? activeWorkTab.subscriptionListening && isRunButtonHovered
+                              ? "bg-red-500/80 text-white hover:bg-red-500 cursor-pointer"
+                              : "bg-green-1/70 text-white hover:bg-green-1 cursor-pointer"
                             : "bg-green-1/25 text-white/45 cursor-default"
                           }
                         `}
                       >
                         <BiCaretRightIcon size={20} />
-                        {isRunningOperation ? "Running" : "Run"}
+                        {isRunningOperation ? <div className="mx-auto my-0.5">
+                          <div className="w-5 h-5 border-2 border-white border-t-black-1 rounded-full animate-spin" />
+                        </div> : activeWorkTab.subscriptionListening
+                          ? isRunButtonHovered
+                            ? "Disconnect"
+                            : "Listening..."
+                          : "Run"}
                       </button>
                     </div>
                   </div>
@@ -6091,14 +9712,14 @@ const Home: React.FC = () => {
 
                 <Panel minSize={"50px"} className='flex flex-col min-h-0'>
                   <div className="bg-black-1 flex flex-col flex-1 min-h-0">
-                    <div className="flex h-[38px] shrink-0 items-center border-b border-b-gray-2 px-2">
+                    <div className="flex h-[40px] pt-0.5 shrink-0 items-center border-b border-b-gray-2">
                       <button
                         type="button"
-                        onClick={() => setRequestConfigTab("variables")}
+                        onClick={() => setActiveRequestConfigTab("variables")}
                         className={`
-                          h-full px-3 text-sm font-semibold uppercase tracking-wide
+                          h-full px-3 text-base font-semibold tracking-wide
                           border-b-2 transition-colors
-                          ${requestConfigTab === "variables"
+                          ${activeWorkTab.requestConfigTab === "variables"
                             ? "border-green-1 text-white"
                             : "border-transparent text-white/45 hover:text-white/75"
                           }
@@ -6108,11 +9729,11 @@ const Home: React.FC = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setRequestConfigTab("headers")}
+                        onClick={() => setActiveRequestConfigTab("headers")}
                         className={`
-                          h-full px-3 text-sm font-semibold uppercase tracking-wide
+                          h-full px-3 text-base font-semibold tracking-wide
                           border-b-2 transition-colors
-                          ${requestConfigTab === "headers"
+                          ${activeWorkTab.requestConfigTab === "headers"
                             ? "border-green-1 text-white"
                             : "border-transparent text-white/45 hover:text-white/75"
                           }
@@ -6125,7 +9746,7 @@ const Home: React.FC = () => {
                       <div
                         className={`
                           absolute inset-0 min-h-0
-                          ${requestConfigTab === "variables"
+                          ${activeWorkTab.requestConfigTab === "variables"
                             ? "opacity-100 pointer-events-auto"
                             : "opacity-0 pointer-events-none"
                           }
@@ -6135,7 +9756,7 @@ const Home: React.FC = () => {
                       <div
                         className={`
                           absolute inset-0 min-h-0
-                          ${requestConfigTab === "headers"
+                          ${activeWorkTab.requestConfigTab === "headers"
                             ? "opacity-100 pointer-events-auto"
                             : "opacity-0 pointer-events-none"
                           }
@@ -6177,35 +9798,834 @@ const Home: React.FC = () => {
 
             <Panel minSize={"100px"} className='flex flex-col min-h-0'>
               <div className="bg-black-1 flex flex-col flex-1 min-h-0 border-t border-t-gray-2">
-                <div className="flex h-[38px] shrink-0 items-center justify-between border-b border-b-gray-2 px-3">
-                  <span className="text-sm font-semibold uppercase tracking-wide text-white/70">
-                    Response
-                  </span>
-                  <button
-                    type="button"
-                    onClick={copyResponseToClipboard}
-                    className="
-                      inline-flex h-7 w-7 items-center justify-center rounded-[4px]
-                      text-white/55 transition-colors hover:bg-white/10 hover:text-white
-                    "
-                    title="Copy response"
-                  >
-                    {responseCopied ? (
-                      <Check size={16} />
-                    ) : (
-                      <Copy size={16} />
+                <div className="flex h-[40px] shrink-0 items-center justify-between border-b border-b-gray-2 px-3">
+                  <div className="flex h-full items-center gap-1">
+                    {(["body", "cookies", "headers"] as ResponsePanelTab[]).map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => setActiveResponsePanelTab(tab)}
+                        className={`
+                          h-full px-2 text-sm font-semibold capitalize transition-colors border-b-2
+                          ${activeWorkTab.responsePanelTab === tab
+                            ? "border-green-1 text-white"
+                            : "border-transparent text-white/45 hover:text-white/75"
+                          }
+                        `}
+                      >
+                        {tab}
+                        {tab === "cookies" && activeWorkTab.responseCookies.length > 0
+                          ? ` (${activeWorkTab.responseCookies.length})`
+                          : ""}
+                        {tab === "headers" && Object.keys(activeWorkTab.responseHeaders).length > 0
+                          ? ` (${Object.keys(activeWorkTab.responseHeaders).length})`
+                          : ""}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="ml-auto flex items-center gap-3 text-xs text-white/55">
+                    {activeWorkTab.responseStatus && (
+                      <span className={`rounded-[3px] px-1.5 py-0.5 font-semibold ${
+                        (activeWorkTab.responseStatusCode ?? 0) >= 400
+                          ? "bg-red-500/25 text-red-200"
+                          : "bg-green-1/20 text-green-1"
+                      }`}>
+                        {formatResponseStatus(
+                          activeWorkTab.responseStatusCode,
+                          activeWorkTab.responseStatus
+                        )}
+                      </span>
                     )}
-                  </button>
+                    {activeWorkTab.responseDuration !== undefined && (
+                      <span className="inline-flex items-center gap-1">
+                        <Clock size={13} />
+                        {formatResponseDuration(activeWorkTab.responseDuration)}
+                      </span>
+                    )}
+                    {activeWorkTab.responseSize !== undefined && (
+                      <span className="inline-flex items-center gap-1">
+                        <Database size={13} />
+                        {formatResponseSize(activeWorkTab.responseSize)}
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={copyResponseToClipboard}
+                      className="
+                        inline-flex h-7 w-7 items-center justify-center rounded-[4px]
+                        text-white transition-colors hover:bg-white/10 hover:text-white
+                      "
+                      title="Copy response"
+                    >
+                      {responseCopied ? (
+                        <Check size={20} />
+                      ) : (
+                        <Copy size={20} />
+                      )}
+                    </button>
+                  </div>
                 </div>
-                <div
-                  className="relative flex-1 min-h-0 text-left"
-                  ref={resultDomRef}
-                />
+                <div className="relative flex-1 min-h-0 text-left">
+                  <div
+                    className={`absolute inset-0 ${activeWorkTab.responsePanelTab === "body" ? "opacity-100" : "pointer-events-none opacity-0"}`}
+                    ref={resultDomRef}
+                  />
+                  {activeWorkTab.responsePanelTab === "cookies" && (
+                    <OverlayScrollbarsComponent className="absolute inset-0" options={overlayScrollOptions} defer>
+                      <table className="w-full table-fixed border-collapse text-left text-sm">
+                        <thead className="text-white/60">
+                          <tr>
+                            {["Name", "Value", "Domain", "Path", "Expires", "HttpOnly", "Secure"].map((header) => (
+                              <th key={header} style={{ resize: "horizontal", overflow: "auto" }} className="border-r border-b border-gray-2 px-3 py-2 font-semibold last:border-r">
+                                {header}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeWorkTab.responseCookies.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} className="px-3 py-4 text-white/35">
+                                No cookies
+                              </td>
+                            </tr>
+                          ) : activeWorkTab.responseCookies.map((cookie) => (
+                            <tr key={`${cookie.name}-${cookie.domain}-${cookie.path}`} className="text-white/80">
+                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{cookie.name}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{cookie.value}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{cookie.domain}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{cookie.path}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{cookie.expires}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{String(cookie.httpOnly)}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{String(cookie.secure)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </OverlayScrollbarsComponent>
+                  )}
+                  {activeWorkTab.responsePanelTab === "headers" && (
+                    <OverlayScrollbarsComponent className="absolute inset-0" options={overlayScrollOptions} defer>
+                      <table className="w-full table-fixed border-collapse text-left text-sm">
+                        <thead className="text-white/60">
+                          <tr>
+                            <th style={{ resize: "horizontal", overflow: "auto" }} className="border-r border-b border-gray-2 px-3 py-2 font-semibold">Name</th>
+                            <th style={{ resize: "horizontal", overflow: "auto" }} className="border-r border-b border-gray-2 px-3 py-2 font-semibold">Value</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.keys(activeWorkTab.responseHeaders).length === 0 ? (
+                            <tr>
+                              <td colSpan={2} className="px-3 py-4 text-white/35">
+                                No headers
+                              </td>
+                            </tr>
+                          ) : Object.entries(activeWorkTab.responseHeaders).map(([name, value]) => (
+                            <tr key={name} className="text-white/80">
+                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{name}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{value}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </OverlayScrollbarsComponent>
+                  )}
+                </div>
               </div>
             </Panel>
           </Group>
+          )}
         </Panel>
       </Group>
+      {closeConfirmTabId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-5">
+          <div className="w-[420px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
+            <div className="text-base font-semibold text-white">
+              Tab chưa lưu
+            </div>
+            <div className="mt-2 text-sm leading-6 text-white/60">
+              Tab này có thay đổi chưa được lưu. Bạn có chắc muốn đóng tab này không? Bấm Ctrl + S để lưu.
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setCloseConfirmTabId(null)
+                }
+                className="rounded-[4px] px-3 py-1.5 text-sm font-semibold text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const targetId =
+                    closeConfirmTabId;
+                  setCloseConfirmTabId(null);
+                  closeWorkTab(
+                    targetId,
+                    true
+                  );
+                }}
+                className="rounded-[4px] bg-red-500/80 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-500"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {tabContextMenu && (
+        <div
+          className="fixed z-[70] min-w-[150px] rounded-[6px] border border-gray-1 bg-black-2 py-1 text-left shadow-2xl"
+          style={{
+            left:
+              tabContextMenu.x,
+            top:
+              tabContextMenu.y,
+          }}
+          onClick={(event) =>
+            event.stopPropagation()
+          }
+        >
+          <button
+            type="button"
+            onClick={() => {
+              closeWorkTab(
+                tabContextMenu.tabId
+              );
+              setTabContextMenu(null);
+            }}
+            className="block w-full px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10 hover:text-white"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={() => closeAllWorkTabs(true)}
+            className="block w-full px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10 hover:text-white"
+          >
+            Close all
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              togglePinWorkTab(
+                tabContextMenu.tabId
+              )
+            }
+            className="block w-full px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10 hover:text-white"
+          >
+            {workTabs.find((tab) => tab.id === tabContextMenu.tabId)?.pinned
+              ? "Unpin"
+              : "Pin"}
+          </button>
+        </div>
+      )}
+      {contextMenu && (
+        <div
+          className="fixed z-[60] min-w-[180px] rounded-[6px] border border-gray-1 bg-black-2 py-1 text-left shadow-2xl"
+          style={{
+            left:
+              contextMenu.x,
+            top:
+              contextMenu.y,
+          }}
+          onClick={(event) =>
+            event.stopPropagation()
+          }
+        >
+          {contextMenu.type !== "api" && (
+            <button
+              type="button"
+              onClick={() => {
+                setFolderDialog({
+                  open: true,
+                  mode: "create",
+                  collection:
+                    contextMenu.collection,
+                  parentPath:
+                    contextMenu.type === "folder"
+                      ? contextMenu.folderPath
+                      : "",
+                  folderPath: "",
+                  name: "",
+                });
+                setContextMenu(null);
+              }}
+              className="block w-full px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10 hover:text-white"
+            >
+              Create folder
+            </button>
+          )}
+          {contextMenu.type === "collection" && (
+            <button
+              type="button"
+              onClick={() => {
+                exportCollection(
+                  contextMenu.collection
+                );
+                setContextMenu(null);
+              }}
+              className="block w-full px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10 hover:text-white"
+            >
+              Export
+            </button>
+          )}
+          {contextMenu.type === "collection" && (
+            <button
+              type="button"
+              onClick={() => {
+                setCollectionDialog({
+                  open: true,
+                  mode: "rename",
+                  oldName:
+                    contextMenu.collection,
+                  name:
+                    contextMenu.collection,
+                });
+                setContextMenu(null);
+              }}
+              className="block w-full px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10 hover:text-white"
+            >
+              Rename
+            </button>
+          )}
+          {contextMenu.type === "folder" && (
+            <button
+              type="button"
+              onClick={() => {
+                setFolderDialog({
+                  open: true,
+                  mode: "rename",
+                  collection:
+                    contextMenu.collection,
+                  parentPath: "",
+                  folderPath:
+                    contextMenu.folderPath,
+                  name:
+                    contextMenu.name,
+                });
+                setContextMenu(null);
+              }}
+              className="block w-full px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10 hover:text-white"
+            >
+              Rename
+            </button>
+          )}
+          {contextMenu.type === "api" && (
+            <button
+              type="button"
+              onClick={() => {
+                setApiDialog({
+                  open: true,
+                  apiId: contextMenu.api.id,
+                  name: contextMenu.api.name,
+                });
+                setContextMenu(null);
+              }}
+              className="block w-full px-3 py-2 text-left text-sm text-white/75 hover:bg-white/10 hover:text-white"
+            >
+              Rename
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={deleteContextTarget}
+            className="block w-full px-3 py-2 text-left text-sm text-red-300 hover:bg-red-500/10 hover:text-red-200"
+          >
+            Delete
+          </button>
+        </div>
+      )}
+      {collectionDialog.open && (
+        <div
+          onClick={() =>
+            setCollectionDialog({
+              open: false,
+              mode: "create",
+              oldName: "",
+              name: "",
+            })
+          }
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-5">
+          <div onClick={(e) => e.stopPropagation()} className="w-[380px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
+            <div className="text-base font-semibold text-white">
+              {collectionDialog.mode === "create" ? "Create collection" : "Rename collection"}
+            </div>
+            <input
+              autoFocus
+              value={collectionDialog.name}
+              onChange={(event) =>
+                setCollectionDialog((dialog) => ({
+                  ...dialog,
+                  name:
+                    event.target.value,
+                }))
+              }
+              className="mt-4 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none"
+              placeholder="Collection name"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setCollectionDialog({
+                    open: false,
+                    mode: "create",
+                    oldName: "",
+                    name: "",
+                  })
+                }
+                className="rounded-[4px] px-3 py-1.5 text-sm font-semibold text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  collectionDialog.mode === "create"
+                    ? createCollection(collectionDialog.name)
+                    : renameCollectionAction()
+                }
+                className="rounded-[4px] bg-green-1/75 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-1"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {folderDialog.open && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/55 px-5">
+          <div className="w-[420px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
+            <div className="text-base font-semibold text-white">
+              {folderDialog.mode === "create" ? "Create folder" : "Rename folder"}
+            </div>
+            <div className="mt-3 text-xs uppercase tracking-wide text-white/35">
+              {folderDialog.collection}
+              {folderDialog.parentPath ? ` / ${folderDialog.parentPath}` : ""}
+            </div>
+            <input
+              autoFocus
+              value={folderDialog.name}
+              onChange={(event) =>
+                setFolderDialog((dialog) => ({
+                  ...dialog,
+                  name:
+                    event.target.value,
+                }))
+              }
+              className="mt-3 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
+              placeholder="Folder name"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setFolderDialog({
+                    open: false,
+                    mode: "create",
+                    collection: "Default",
+                    parentPath: "",
+                    folderPath: "",
+                    name: "",
+                  })
+                }
+                className="rounded-[4px] px-3 py-1.5 text-sm font-semibold text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  folderDialog.mode === "create"
+                    ? createFolder(
+                      folderDialog.collection,
+                      folderDialog.parentPath,
+                      folderDialog.name
+                    )
+                    : renameFolderAction()
+                }
+                className="rounded-[4px] bg-green-1/75 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-1"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {apiDialog.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-5">
+          <div className="w-[380px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
+            <div className="text-base font-semibold text-white">
+              Rename API
+            </div>
+            <input
+              autoFocus
+              value={apiDialog.name}
+              onChange={(event) =>
+                setApiDialog((dialog) => ({
+                  ...dialog,
+                  name: event.target.value,
+                }))
+              }
+              className="mt-4 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
+              placeholder="API name"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setApiDialog({
+                    open: false,
+                    apiId: "",
+                    name: "",
+                  })
+                }
+                className="rounded-[4px] px-3 py-1.5 text-sm font-semibold text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (apiDialog.name.trim()) {
+                    await RenameSavedAPI(apiDialog.apiId, apiDialog.name.trim());
+                    setApiDialog({ open: false, apiId: "", name: "" });
+                    await refreshSavedAPIs();
+                  }
+                }}
+                className="rounded-[4px] bg-green-1/75 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-1"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {environmentEditorOpen && editingEnvironment && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-5">
+          <div className="w-[760px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
+            <div className="flex items-center justify-between">
+              <input
+                value={editingEnvironment.name}
+                onChange={(event) =>
+                  updateEnvironment({
+                    ...editingEnvironment,
+                    name:
+                      event.target.value,
+                  })
+                }
+                className="h-9 min-w-0 flex-1 bg-transparent text-base font-semibold text-white outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setEnvironmentEditorOpen(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="mt-4 overflow-hidden rounded-[4px] border border-gray-2">
+              <div className="grid grid-cols-2 border-b border-gray-2 bg-white/5 text-sm font-semibold text-white/60">
+                <div className="border-r border-gray-2 px-3 py-2">Variable</div>
+                <div className="px-3 py-2">Value</div>
+              </div>
+              {editingEnvironment.variables.map((variable) => (
+                <div key={variable.id} className="grid grid-cols-2 border-b border-gray-2 last:border-b-0">
+                  <input
+                    value={variable.key}
+                    onChange={(event) =>
+                      updateEnvironment({
+                        ...editingEnvironment,
+                        variables:
+                          editingEnvironment.variables.map((item) =>
+                            item.id === variable.id
+                              ? {
+                                ...item,
+                                key:
+                                  event.target.value,
+                              }
+                              : item
+                          ),
+                      })
+                    }
+                    className="h-9 border-r border-gray-2 bg-transparent px-3 text-sm text-white outline-none"
+                    placeholder="Variable"
+                  />
+                  <input
+                    value={variable.value}
+                    onChange={(event) =>
+                      updateEnvironment({
+                        ...editingEnvironment,
+                        variables:
+                          editingEnvironment.variables.map((item) =>
+                            item.id === variable.id
+                              ? {
+                                ...item,
+                                value:
+                                  event.target.value,
+                              }
+                              : item
+                          ),
+                      })
+                    }
+                    className="h-9 bg-transparent px-3 text-sm text-white outline-none"
+                    placeholder="Value"
+                  />
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() =>
+                  updateEnvironment({
+                    ...editingEnvironment,
+                    variables: [
+                      ...editingEnvironment.variables,
+                      {
+                        id:
+                          `variable-${Date.now()}`,
+                        key:
+                          "",
+                        value:
+                          "",
+                      },
+                    ],
+                  })
+                }
+                className="block h-9 w-full px-3 text-left text-sm text-white/45 hover:bg-white/10 hover:text-white"
+              >
+                Add variable
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {cloudDialogOpen && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-5">
+          <div className="w-[480px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-base font-semibold text-white">Google Drive Sync</div>
+                <div className="mt-1 text-xs text-white/45">
+                  Collection data syncs to Google Drive appdata. Environment data stays local.
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setCloudSettingsOpen((open) => !open)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] text-white/60 hover:bg-white/10 hover:text-white"
+                  title="Google Drive settings"
+                >
+                  <Settings size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCloudDialogOpen(false)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] text-white/60 hover:bg-white/10 hover:text-white"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            {cloudSettingsOpen && (
+              <div className="mt-4 space-y-3">
+                <label className="block text-sm font-semibold text-white/70">
+                  Account email
+                  <input
+                    value={googleConfig.accountEmail}
+                    onChange={(event) =>
+                      setGoogleConfig((config) => ({
+                        ...config,
+                        accountEmail:
+                          event.target.value,
+                      }))
+                    }
+                    className="mt-1 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
+                    placeholder="Label only"
+                  />
+                </label>
+                <label className="block text-sm font-semibold text-white/70">
+                  Client ID
+                  <input
+                    value={googleConfig.clientId}
+                    onChange={(event) =>
+                      setGoogleConfig((config) => ({
+                        ...config,
+                        clientId:
+                          event.target.value,
+                      }))
+                    }
+                    className="mt-1 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
+                  />
+                </label>
+                <label className="block text-sm font-semibold text-white/70">
+                  Client secret
+                  <input
+                    value={googleConfig.clientSecret}
+                    onChange={(event) =>
+                      setGoogleConfig((config) => ({
+                        ...config,
+                        clientSecret:
+                          event.target.value,
+                      }))
+                    }
+                    type="password"
+                    className="mt-1 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
+                    placeholder="Leave empty to keep current secret"
+                  />
+                </label>
+                <div className="flex justify-end">
+                  <button type="button" onClick={saveGoogleDriveSettings} className="rounded-[4px] px-3 py-1.5 text-sm font-semibold text-white/70 hover:bg-white/10 hover:text-white">
+                    Save settings
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="mt-4 rounded-[4px] border border-gray-2 bg-black-1 p-3 text-sm text-white/65">
+              <div>Status: <span className="font-semibold text-white">{cloudSyncState.status}</span></div>
+              {cloudSyncState.message && <div className="mt-1">{cloudSyncState.message}</div>}
+              <div className="mt-1 text-xs text-white/40">
+                Local v{cloudSyncState.localVersion || 0} / Cloud v{cloudSyncState.cloudVersion || 0}
+              </div>
+            </div>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={requestGoogleDriveAccess} className="rounded-[4px] px-3 py-1.5 text-sm font-semibold text-white/70 hover:bg-white/10 hover:text-white">
+                Connect
+              </button>
+              {cloudSyncState.status === "pull_available" && (
+                <button type="button" onClick={pullFromGoogleDrive} className="rounded-[4px] bg-amber-500/80 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-500">
+                  Pull
+                </button>
+              )}
+              {cloudSyncState.status === "pending" && (
+                <button type="button" onClick={syncToGoogleDrive} className="rounded-[4px] bg-green-1/75 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-1">
+                  Push
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {saveDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-5">
+          <div className="w-[460px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
+            <div className="text-base font-semibold text-white">
+              Save API
+            </div>
+            <div className="mt-4 space-y-3">
+              <label className="block text-sm font-semibold text-white/70">
+                File name
+                <input
+                  value={saveDialogDraft.name}
+                  onChange={(event) =>
+                    setSaveDialogDraft((draft) => ({
+                      ...draft,
+                      name:
+                        event.target.value,
+                    }))
+                  }
+                  className="mt-1 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
+                />
+              </label>
+              <label className="block text-sm font-semibold text-white/70">
+                <div className="flex items-center justify-between">
+                  <span>Location</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCollectionDialog({
+                          open: true,
+                          mode: "create",
+                          oldName: "",
+                          name: "",
+                        })
+                      }
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-[4px] bg-white/10 text-white/70 hover:bg-white/15 hover:text-white"
+                      title="New collection"
+                    >
+                      <Plus size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setFolderDialog({
+                          open: true,
+                          mode: "create",
+                          collection:
+                            saveDialogDraft.collection || "Default",
+                          parentPath:
+                            saveDialogDraft.folder,
+                          folderPath: "",
+                          name: "",
+                        })
+                      }
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-[4px] bg-white/10 text-white/70 hover:bg-white/15 hover:text-white"
+                      title="New folder"
+                    >
+                      <ChevronRight size={15} />
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-1 flex items-center gap-2">
+                  <div className="min-w-0 flex-1 truncate rounded-[4px] border border-gray-1 bg-gray-3 px-2 py-2 text-sm text-white/80">
+                    {saveDialogDraft.collection || "Default"}
+                    {saveDialogDraft.folder ? ` / ${saveDialogDraft.folder}` : ""}
+                  </div>
+                </div>
+                <div className="mt-2">
+                  {renderSaveLocationPicker()}
+                </div>
+                <datalist id="collection-options">
+                  {existingCollections.map((collection) => (
+                    <option
+                      key={collection}
+                      value={collection}
+                    />
+                  ))}
+                </datalist>
+              </label>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setSaveDialogOpen(false)
+                }
+                className="rounded-[4px] px-3 py-1.5 text-sm font-semibold text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  saveActiveTab()
+                }
+                className="rounded-[4px] bg-green-1/75 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-1"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="fixed bottom-4 right-4 z-[100] flex w-[360px] max-w-[calc(100vw-32px)] flex-col gap-2">
+        {appToasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`rounded-[6px] border px-3 py-2 text-sm shadow-2xl ${
+              toast.type === "success"
+                ? "border-green-1/40 bg-green-1/15 text-green-100"
+                : "border-red-500/40 bg-red-500/15 text-red-100"
+            }`}
+          >
+            {toast.message}
+          </div>
+        ))}
+      </div>
     </div>
   );
 };

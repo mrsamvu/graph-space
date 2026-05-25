@@ -70,4 +70,24 @@
     --os-handle-border-radius: 999px;
     --os-handle-interactive-area-offset: 4px;
   }
+
+  .os-theme-graph-space-tabs {
+    --os-size: 2px;
+    --os-padding-perpendicular: 0px;
+    --os-padding-axis: 0px;
+    --os-track-bg: transparent;
+    --os-track-bg-hover: transparent;
+    --os-track-bg-active: transparent;
+    --os-track-border-radius: 999px;
+    --os-handle-bg: rgba(190, 197, 208, 0.28);
+    --os-handle-bg-hover: rgba(220, 226, 235, 0.52);
+    --os-handle-bg-active: rgba(240, 244, 248, 0.68);
+    --os-handle-border-radius: 999px;
+    --os-handle-interactive-area-offset: 2px;
+  }
+
+  .os-theme-graph-space-tabs.os-scrollbar-horizontal {
+    bottom: 0;
+    height: 2px;
+  }
 }
