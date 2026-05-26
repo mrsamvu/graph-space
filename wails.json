@@ -1,13 +1,17 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "graph-space",
-  "outputfilename": "graph-space",
+  "name": "Graph Space",
+  "outputfilename": "graph-space_v1.0.0",
   "frontend:install": "npm install",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "",
-    "email": ""
+    "name": "hung",
+    "email": "hung2811.iuh@gmail.com"
+  },
+  "info": {
+    "productName": "Graph Space",
+    "productDescription": "Ứng dụng kiểm thử graphql offline."
   }
 }

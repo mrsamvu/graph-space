@@ -4,10 +4,11 @@ import (
 	"context"
 	"embed"
 
+	"graph-space/services"
+
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"graph-space/services"
 )
 
 //go:embed all:frontend/dist
@@ -21,7 +22,7 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:     "graph-space",
+		Title:     "Graph Space",
 		Width:     1024,
 		Height:    768,
 		Frameless: true,
