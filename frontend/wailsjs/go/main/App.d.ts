@@ -36,6 +36,8 @@ export function LoadState():Promise<main.AppState>;
 
 export function MoveFolder(arg1:main.MoveFolderRequest):Promise<main.SavedCollection>;
 
+export function OpenBugReportAttachmentFile():Promise<main.BugReportAttachment>;
+
 export function OpenJSONFile():Promise<main.JSONFileResult>;
 
 export function PullWorkspacesFromGoogleDrive():Promise<main.CloudSyncState>;
@@ -61,6 +63,8 @@ export function SaveJSONFile(arg1:string,arg2:string):Promise<string>;
 export function SaveSavedAPI(arg1:main.SavedAPI):Promise<main.SavedAPI>;
 
 export function SaveState(arg1:string):Promise<string>;
+
+export function SubmitBugReport(arg1:main.BugReportRequest):Promise<void>;
 
 export function SwitchWorkspace(arg1:string):Promise<main.Workspace>;
 

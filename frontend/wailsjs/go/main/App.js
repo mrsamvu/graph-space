@@ -70,6 +70,10 @@ export function MoveFolder(arg1) {
   return window['go']['main']['App']['MoveFolder'](arg1);
 }
 
+export function OpenBugReportAttachmentFile() {
+  return window['go']['main']['App']['OpenBugReportAttachmentFile']();
+}
+
 export function OpenJSONFile() {
   return window['go']['main']['App']['OpenJSONFile']();
 }
@@ -120,6 +124,10 @@ export function SaveSavedAPI(arg1) {
 
 export function SaveState(arg1) {
   return window['go']['main']['App']['SaveState'](arg1);
+}
+
+export function SubmitBugReport(arg1) {
+  return window['go']['main']['App']['SubmitBugReport'](arg1);
 }
 
 export function SwitchWorkspace(arg1) {

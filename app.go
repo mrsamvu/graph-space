@@ -7,10 +7,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/textproto"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -132,6 +136,21 @@ type JSONFileResult struct {
 	Content string `json:"content"`
 }
 
+type BugReportRequest struct {
+	Title       string                `json:"title"`
+	Description string                `json:"description"`
+	DeviceOS    string                `json:"deviceOs"`
+	Tags        []string              `json:"tags"`
+	Attachments []BugReportAttachment `json:"attachments"`
+}
+
+type BugReportAttachment struct {
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"contentType"`
+}
+
 type CloudBackupWorkspace struct {
 	Workspace   Workspace         `json:"workspace"`
 	Collections []SavedCollection `json:"collections"`
@@ -146,6 +165,7 @@ type CloudBackupPayload struct {
 }
 
 type CloudSyncLock struct {
+	LockID    string `json:"lockId"`
 	DeviceID  string `json:"deviceId"`
 	StartedAt int64  `json:"startedAt"`
 	ExpiresAt int64  `json:"expiresAt"`
@@ -204,9 +224,38 @@ func NewApp() *App {
 	return &App{}
 }
 
+func loadDotEnvFile(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		value = strings.Trim(value, `"'`)
+		if key == "" || os.Getenv(key) != "" {
+			continue
+		}
+
+		_ = os.Setenv(key, value)
+	}
+}
+
 // Hàm startup chạy tự động khi ứng dụng Wails được bật lên
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	loadDotEnvFile(".env")
 
 	// Lấy đường dẫn thư mục Cấu hình chuẩn của OS (Windows: AppData, Linux: .config, Mac: Application Support)
 	userConfig, err := os.UserConfigDir()
@@ -308,6 +357,73 @@ func jsonFileFilters() []runtime.FileFilter {
 	}
 }
 
+func bugReportAttachmentFilters() []runtime.FileFilter {
+	return []runtime.FileFilter{
+		{
+			DisplayName: "Images and videos",
+			Pattern:     "*.png;*.jpg;*.jpeg;*.gif;*.webp;*.mp4;*.mov;*.webm",
+		},
+		{
+			DisplayName: "Images",
+			Pattern:     "*.png;*.jpg;*.jpeg;*.gif;*.webp",
+		},
+		{
+			DisplayName: "Videos",
+			Pattern:     "*.mp4;*.mov;*.webm",
+		},
+	}
+}
+
+func bugReportAttachmentContentType(path string) string {
+	contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
+	if contentType != "" {
+		return contentType
+	}
+
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	case ".mp4":
+		return "video/mp4"
+	case ".mov":
+		return "video/quicktime"
+	case ".webm":
+		return "video/webm"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func validateBugReportAttachment(attachment BugReportAttachment) error {
+	if strings.TrimSpace(attachment.Path) == "" {
+		return fmt.Errorf("attachment path is required")
+	}
+
+	stat, err := os.Stat(attachment.Path)
+	if err != nil {
+		return fmt.Errorf("cannot read attachment: %w", err)
+	}
+	if stat.IsDir() {
+		return fmt.Errorf("attachment must be a file")
+	}
+	if stat.Size() > 10*1024*1024 {
+		return fmt.Errorf("attachment %s is larger than 10MB", stat.Name())
+	}
+
+	contentType := bugReportAttachmentContentType(attachment.Path)
+	if !strings.HasPrefix(contentType, "image/") && !strings.HasPrefix(contentType, "video/") {
+		return fmt.Errorf("attachment %s must be an image or video", stat.Name())
+	}
+
+	return nil
+}
+
 func (a *App) OpenJSONFile() (JSONFileResult, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:   "Import JSON file",
@@ -329,6 +445,36 @@ func (a *App) OpenJSONFile() (JSONFileResult, error) {
 		Path:    path,
 		Content: string(data),
 	}, nil
+}
+
+func (a *App) OpenBugReportAttachmentFile() (BugReportAttachment, error) {
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title:   "Attach image or video",
+		Filters: bugReportAttachmentFilters(),
+	})
+	if err != nil {
+		return BugReportAttachment{}, err
+	}
+	if path == "" {
+		return BugReportAttachment{}, nil
+	}
+
+	stat, err := os.Stat(path)
+	if err != nil {
+		return BugReportAttachment{}, err
+	}
+
+	attachment := BugReportAttachment{
+		Path:        path,
+		Name:        stat.Name(),
+		Size:        stat.Size(),
+		ContentType: bugReportAttachmentContentType(path),
+	}
+	if err := validateBugReportAttachment(attachment); err != nil {
+		return BugReportAttachment{}, err
+	}
+
+	return attachment, nil
 }
 
 func (a *App) SaveJSONFile(defaultFilename string, content string) (string, error) {
@@ -354,6 +500,159 @@ func (a *App) SaveJSONFile(defaultFilename string, content string) (string, erro
 	}
 
 	return path, os.WriteFile(path, []byte(content), 0644)
+}
+
+func truncateDiscordThreadName(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "Bug report"
+	}
+	runes := []rune(value)
+	if len(runes) > 90 {
+		return string(runes[:90])
+	}
+	return value
+}
+
+func writeDiscordWebhookMultipartFile(writer *multipart.Writer, fieldName string, attachment BugReportAttachment) error {
+	file, err := os.Open(attachment.Path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	partHeader := make(textproto.MIMEHeader)
+	partHeader.Set("Content-Disposition", fmt.Sprintf(`form-data; name="%s"; filename="%s"`, fieldName, strings.ReplaceAll(attachment.Name, `"`, `\"`)))
+	partHeader.Set("Content-Type", attachment.ContentType)
+
+	part, err := writer.CreatePart(partHeader)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(part, file)
+	return err
+}
+
+func (a *App) SubmitBugReport(req BugReportRequest) error {
+	webhookURL := strings.TrimSpace(os.Getenv("DISCORD_BUG_REPORT_WEBHOOK_URL"))
+	if webhookURL == "" {
+		return fmt.Errorf("Discord bug report webhook is not configured")
+	}
+
+	title := strings.TrimSpace(req.Title)
+	description := strings.TrimSpace(req.Description)
+	deviceOS := strings.TrimSpace(req.DeviceOS)
+	if title == "" {
+		return fmt.Errorf("title is required")
+	}
+	if description == "" {
+		return fmt.Errorf("bug description is required")
+	}
+	if len([]rune(title)) > 100 {
+		return fmt.Errorf("title must be 100 characters or fewer")
+	}
+	if len([]rune(description)) > 2000 {
+		return fmt.Errorf("bug description must be 2000 characters or fewer")
+	}
+	if len([]rune(deviceOS)) > 100 {
+		return fmt.Errorf("device / os must be 100 characters or fewer")
+	}
+	if deviceOS == "" {
+		deviceOS = "Unknown"
+	}
+
+	allowedTags := map[string]bool{
+		"1508684326659690566": true,
+		"1508684372025413663": true,
+		"1508684518586974258": true,
+	}
+	tags := []string{}
+	for _, tag := range req.Tags {
+		tag = strings.TrimSpace(tag)
+		if !allowedTags[tag] {
+			continue
+		}
+		tags = append(tags, tag)
+	}
+	if len(req.Attachments) > 3 {
+		return fmt.Errorf("bug report supports up to 3 attachments")
+	}
+	for _, attachment := range req.Attachments {
+		if err := validateBugReportAttachment(attachment); err != nil {
+			return err
+		}
+	}
+
+	payload := map[string]any{
+		"username":     "Graph Space Bug Reporter",
+		"thread_name":  truncateDiscordThreadName(title),
+		"applied_tags": tags,
+		"embeds": []map[string]any{
+			{
+				"title":       title,
+				"description": description,
+				"color":       15158332,
+				"fields": []map[string]any{
+					{
+						"name":   "Device / OS",
+						"value":  deviceOS,
+						"inline": false,
+					},
+				},
+				"timestamp": time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+		"allowed_mentions": map[string]any{
+			"parse": []string{},
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	var requestBody *bytes.Reader
+	contentType := "application/json"
+	if len(req.Attachments) == 0 {
+		requestBody = bytes.NewReader(body)
+	} else {
+		var multipartBody bytes.Buffer
+		writer := multipart.NewWriter(&multipartBody)
+		if err := writer.WriteField("payload_json", string(body)); err != nil {
+			return err
+		}
+		for index, attachment := range req.Attachments {
+			if err := writeDiscordWebhookMultipartFile(writer, fmt.Sprintf("files[%d]", index), attachment); err != nil {
+				return fmt.Errorf("cannot attach %s: %w", attachment.Name, err)
+			}
+		}
+		if err := writer.Close(); err != nil {
+			return err
+		}
+		contentType = writer.FormDataContentType()
+		requestBody = bytes.NewReader(multipartBody.Bytes())
+	}
+
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, webhookURL+"?wait=true", requestBody)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", contentType)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("cannot send bug report: %w", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		responseBody, _ := io.ReadAll(response.Body)
+		return fmt.Errorf("Discord webhook failed: %s %s", response.Status, strings.TrimSpace(string(responseBody)))
+	}
+
+	return nil
 }
 
 func makeWorkspaceID(name string) string {
@@ -1075,6 +1374,16 @@ func upsertAppDataFile(service *drive.Service, name string, contentType string, 
 	return err
 }
 
+func createAppDataFile(service *drive.Service, name string, contentType string, data []byte) (*drive.File, error) {
+	return service.Files.Create(&drive.File{
+		Name:    name,
+		Parents: []string{"appDataFolder"},
+	}).
+		Media(bytes.NewReader(data), googleapi.ContentType(contentType)).
+		Fields("id,name").
+		Do()
+}
+
 func readAppDataFile(service *drive.Service, name string, target any) (bool, error) {
 	existing, err := findAppDataFile(service, name)
 	if err != nil {
@@ -1102,12 +1411,123 @@ func readAppDataFile(service *drive.Service, name string, target any) (bool, err
 	return true, nil
 }
 
+func readAppDataFileByID(service *drive.Service, fileID string, target any) error {
+	response, err := service.Files.Get(fileID).Download()
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+
+	return json.Unmarshal(data, target)
+}
+
 func deleteAppDataFile(service *drive.Service, name string) error {
 	existing, err := findAppDataFile(service, name)
 	if err != nil || existing == nil {
 		return err
 	}
 	return service.Files.Delete(existing.Id).Do()
+}
+
+func deleteAppDataFileByID(service *drive.Service, fileID string) error {
+	if fileID == "" {
+		return nil
+	}
+	return service.Files.Delete(fileID).Do()
+}
+
+type cloudSyncLockFile struct {
+	fileID string
+	name   string
+	lock   CloudSyncLock
+}
+
+func listCloudSyncLockFiles(service *drive.Service) ([]cloudSyncLockFile, error) {
+	query := fmt.Sprintf("name contains '%s' and trashed = false", escapeDriveQueryValue("graph-space-sync-lock"))
+	result, err := service.Files.List().
+		Spaces("appDataFolder").
+		Q(query).
+		Fields("files(id,name,modifiedTime)").
+		PageSize(100).
+		Do()
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UnixMilli()
+	locks := []cloudSyncLockFile{}
+	for _, file := range result.Files {
+		var lock CloudSyncLock
+		if err := readAppDataFileByID(service, file.Id, &lock); err != nil {
+			continue
+		}
+		if lock.ExpiresAt <= now {
+			_ = deleteAppDataFileByID(service, file.Id)
+			continue
+		}
+		if lock.LockID == "" {
+			lock.LockID = file.Id
+		}
+		locks = append(locks, cloudSyncLockFile{
+			fileID: file.Id,
+			name:   file.Name,
+			lock:   lock,
+		})
+	}
+
+	sort.Slice(locks, func(i, j int) bool {
+		if locks[i].lock.StartedAt == locks[j].lock.StartedAt {
+			return locks[i].lock.LockID < locks[j].lock.LockID
+		}
+		return locks[i].lock.StartedAt < locks[j].lock.StartedAt
+	})
+
+	return locks, nil
+}
+
+func cloudSyncLockName(lockID string) string {
+	return fmt.Sprintf("graph-space-sync-lock-%s.json", lockID)
+}
+
+func acquireCloudSyncLock(service *drive.Service, deviceID string, version int64, ttlSecond int64) (func(), error) {
+	lockID := randomState()
+	now := time.Now().UnixMilli()
+	lock := CloudSyncLock{
+		LockID:    lockID,
+		DeviceID:  deviceID,
+		StartedAt: now,
+		ExpiresAt: time.Now().Add(time.Duration(ttlSecond) * time.Second).UnixMilli(),
+		Version:   version,
+	}
+	lockData, _ := json.MarshalIndent(lock, "", "  ")
+	created, err := createAppDataFile(service, cloudSyncLockName(lockID), "application/json", lockData)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create sync lock: %w", err)
+	}
+
+	release := func() {
+		_ = deleteAppDataFileByID(service, created.Id)
+	}
+
+	time.Sleep(750 * time.Millisecond)
+
+	locks, err := listCloudSyncLockFiles(service)
+	if err != nil {
+		release()
+		return nil, fmt.Errorf("cannot verify sync lock: %w", err)
+	}
+
+	if len(locks) == 0 || locks[0].lock.LockID != lockID {
+		release()
+		return nil, fmt.Errorf("another device is syncing this Google Drive data. Try again later")
+	}
+
+	return release, nil
 }
 
 func (a *App) deviceIDPath() string {
@@ -1294,23 +1714,20 @@ func (a *App) SyncAllWorkspacesToGoogleDrive() (CloudSyncState, error) {
 		})
 	}
 
-	var lock CloudSyncLock
-	if ok, err := readAppDataFile(service, "graph-space-sync-lock.json", &lock); err != nil {
-		return a.writeCloudSyncState(CloudSyncState{
-			Status:  "error",
-			Message: fmt.Sprintf("cannot read sync lock: %v", err),
-		})
-	} else if ok && lock.DeviceID != deviceID && lock.ExpiresAt > time.Now().UnixMilli() {
-		return a.writeCloudSyncState(CloudSyncState{
-			Status:  "error",
-			Message: "Another device is syncing this Google Drive data. Try again later.",
-		})
-	}
-
 	currentState, _ := a.GetCloudSyncState()
 	if currentState.LocalVersion == 0 {
 		currentState.LocalVersion = time.Now().UnixMilli()
 	}
+
+	releaseLock, err := acquireCloudSyncLock(service, deviceID, currentState.LocalVersion, driveConfig.LockTTLSecond)
+	if err != nil {
+		return a.writeCloudSyncState(CloudSyncState{
+			Status:  "error",
+			Message: err.Error(),
+		})
+	}
+	defer releaseLock()
+
 	payload, err := a.buildCloudBackupPayload(currentState.LocalVersion)
 	if err != nil {
 		return a.writeCloudSyncState(CloudSyncState{
@@ -1319,23 +1736,8 @@ func (a *App) SyncAllWorkspacesToGoogleDrive() (CloudSyncState, error) {
 		})
 	}
 
-	lock = CloudSyncLock{
-		DeviceID:  deviceID,
-		StartedAt: time.Now().UnixMilli(),
-		ExpiresAt: time.Now().Add(time.Duration(driveConfig.LockTTLSecond) * time.Second).UnixMilli(),
-		Version:   payload.Version,
-	}
-	lockData, _ := json.MarshalIndent(lock, "", "  ")
-	if err := upsertAppDataFile(service, "graph-space-sync-lock.json", "application/json", lockData); err != nil {
-		return a.writeCloudSyncState(CloudSyncState{
-			Status:  "error",
-			Message: fmt.Sprintf("cannot create sync lock: %v", err),
-		})
-	}
-
 	payloadData, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		_ = deleteAppDataFile(service, "graph-space-sync-lock.json")
 		return a.writeCloudSyncState(CloudSyncState{
 			Status:  "error",
 			Message: fmt.Sprintf("cannot encode workspace backup: %v", err),
@@ -1343,14 +1745,12 @@ func (a *App) SyncAllWorkspacesToGoogleDrive() (CloudSyncState, error) {
 	}
 
 	if err := upsertAppDataFile(service, "graph-space-workspaces.json", "application/json", payloadData); err != nil {
-		_ = deleteAppDataFile(service, "graph-space-sync-lock.json")
 		return a.writeCloudSyncState(CloudSyncState{
 			Status:  "error",
 			Message: fmt.Sprintf("cannot upload workspace backup: %v", err),
 		})
 	}
 
-	_ = deleteAppDataFile(service, "graph-space-sync-lock.json")
 	state, _ = a.writeCloudSyncState(CloudSyncState{
 		Status:       "synced",
 		Message:      fmt.Sprintf("Synced %d workspaces to Google Drive app data.", len(payload.Workspaces)),

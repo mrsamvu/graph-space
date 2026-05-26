@@ -5,7 +5,7 @@ import { BiCaretRight, BiCollection } from "react-icons/bi";
 import { RxFileText } from "react-icons/rx";
 import { CiCloudOn } from "react-icons/ci";
 import { Group, Panel, Separator } from "react-resizable-panels";
-import { ArrowRight, Check, ChevronDown, ChevronRight, Clock, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Database, Download, Edit3, Pin, Plus, Search, Settings, Upload, X } from 'lucide-react';
+import { ArrowRight, Bug, Check, ChevronDown, ChevronRight, Clock, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Database, Download, Edit3, Pin, Plus, Search, Settings, Upload, X } from 'lucide-react';
 import { useDispatch, useSelector } from 'react-redux';
 import { setEndpoint } from './redux/slices/home.slice';
 import { RootState } from '@/redux/store';
@@ -60,6 +60,7 @@ import {
   GetCloudSyncState,
   GetGoogleDriveConfig,
   LoadEnvironmentStore,
+  OpenBugReportAttachmentFile,
   OpenJSONFile,
   PullWorkspacesFromGoogleDrive,
   RenameSavedAPI,
@@ -68,6 +69,7 @@ import {
   SaveGoogleDriveConfig,
   SaveJSONFile,
   SyncAllWorkspacesToGoogleDrive,
+  SubmitBugReport,
 } from "../../../wailsjs/go/main/App";
 import { Checkbox } from '../../components/ui/checkbox';
 import { Field, FieldGroup, FieldLabel } from "../../components/ui/field";
@@ -253,6 +255,21 @@ type GoogleDriveConfigView = {
   accountEmail?: string;
 };
 
+const bugReportTagOptions = [
+  {
+    id: "1508684326659690566",
+    label: "UI",
+  },
+  {
+    id: "1508684372025413663",
+    label: "Critical bug",
+  },
+  {
+    id: "1508684518586974258",
+    label: "General bug",
+  },
+];
+
 type CollectionContextMenu =
   | {
     type: "collection";
@@ -310,6 +327,7 @@ const Home: React.FC = () => {
   const { lastEndpoint } = useSelector((state: RootState) => state.app);
   const [schemaStatus, setSchemaStatus] = useState<"idle" | "connected" | "error">("idle");
   const lastIntrospectionRef = useRef<string | null>(null);
+  const lastEndpointErrorToastRef = useRef("");
   const editorViewRef = useRef<Record<string, EditorView>>({});
   const schemaRef = useRef<GraphQLSchema | null>(null);
   const [canRunOperation, setCanRunOperation] = useState(false);
@@ -349,9 +367,10 @@ const Home: React.FC = () => {
     environments: [],
   });
   const [environmentMenuOpen, setEnvironmentMenuOpen] = useState(false);
+  const environmentMenuRef = useRef<HTMLDivElement>(null);
   const [environmentEditorOpen, setEnvironmentEditorOpen] = useState(false);
   const [environmentSearch, setEnvironmentSearch] = useState("");
-  const [editingEnvironmentId, setEditingEnvironmentId] = useState<string | null>(null);
+  const [environmentEditorDraft, setEnvironmentEditorDraft] = useState<EnvironmentItem | null>(null);
   const [cloudDialogOpen, setCloudDialogOpen] = useState(false);
   const [cloudSyncState, setCloudSyncState] = useState<CloudSyncState>({
     status: "idle",
@@ -367,6 +386,25 @@ const Home: React.FC = () => {
     accountEmail: "",
   });
   const [cloudSettingsOpen, setCloudSettingsOpen] = useState(false);
+  const [cloudActionLoading, setCloudActionLoading] = useState<"pull" | "push" | null>(null);
+  const [bugReportOpen, setBugReportOpen] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
+  const [bugReportSubmitting, setBugReportSubmitting] = useState(false);
+  const [bugReportDraft, setBugReportDraft] = useState({
+    title: "",
+    description: "",
+    deviceOs: "",
+    tags: [] as string[],
+    attachments: [] as Array<{
+      path: string;
+      name: string;
+      size: number;
+      contentType: string;
+    }>,
+  });
+  const [cookieColumnWidths, setCookieColumnWidths] = useState([180, 260, 180, 120, 220, 110, 100]);
+  const [headerColumnWidths, setHeaderColumnWidths] = useState([220, 420]);
   const [collectionDialog, setCollectionDialog] = useState({
     open: false,
     mode: "create" as "create" | "rename",
@@ -413,17 +451,20 @@ const Home: React.FC = () => {
     ) ?? null;
 
   const editingEnvironment =
-    environmentStore.environments.find(
-      (environment) =>
-        environment.id ===
-        editingEnvironmentId
-    ) ?? null;
+    environmentEditorDraft;
 
   const environmentVariables =
     activeEnvironment?.variables.filter(
       (variable) =>
         variable.key.trim()
     ) ?? [];
+
+  const googleDriveConnected =
+    ![
+      "not_logged_in",
+      "idle",
+      "error",
+    ].includes(cloudSyncState.status);
 
   const environmentVariablesRef =
     useRef<EnvironmentVariable[]>([]);
@@ -488,14 +529,42 @@ const Home: React.FC = () => {
       },
     ]);
 
-    window.setTimeout(() => {
-      setAppToasts((items) =>
-        items.filter(
-          (item) =>
-            item.id !== id
-        )
-      );
-    }, 3200);
+    if (type === "success") {
+      window.setTimeout(() => {
+        setAppToasts((items) =>
+          items.filter(
+            (item) =>
+              item.id !== id
+          )
+        );
+      }, 3200);
+    }
+  }
+
+  function notifyEndpointConnectionError(
+    message: string
+  ) {
+    const nextMessage =
+      message.trim() ||
+      "Cannot connect to the endpoint URL.";
+
+    setSchemaStatus("error");
+    schemaRef.current = null;
+    setCanRunOperation(false);
+
+    if (
+      lastEndpointErrorToastRef.current ===
+      nextMessage
+    ) {
+      return;
+    }
+
+    lastEndpointErrorToastRef.current =
+      nextMessage;
+    showToast(
+      "error",
+      nextMessage
+    );
   }
 
   const scrollRef = useRef<any>(null);
@@ -685,6 +754,70 @@ const Home: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (!environmentMenuOpen) {
+      return;
+    }
+
+    const closeEnvironmentMenu = (event: MouseEvent) => {
+      const target =
+        event.target as Node | null;
+
+      if (
+        target &&
+        environmentMenuRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      setEnvironmentMenuOpen(false);
+    };
+
+    window.addEventListener(
+      "mousedown",
+      closeEnvironmentMenu
+    );
+
+    return () => {
+      window.removeEventListener(
+        "mousedown",
+        closeEnvironmentMenu
+      );
+    };
+  }, [environmentMenuOpen]);
+
+  useEffect(() => {
+    if (!settingsMenuOpen) {
+      return;
+    }
+
+    const closeSettingsMenu = (event: MouseEvent) => {
+      const target =
+        event.target as Node | null;
+
+      if (
+        target &&
+        settingsMenuRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      setSettingsMenuOpen(false);
+    };
+
+    window.addEventListener(
+      "mousedown",
+      closeSettingsMenu
+    );
+
+    return () => {
+      window.removeEventListener(
+        "mousedown",
+        closeSettingsMenu
+      );
+    };
+  }, [settingsMenuOpen]);
+
+  useEffect(() => {
     const handleWorkspaceChanged = () => {
       refreshSavedAPIs();
       refreshCloudState();
@@ -705,24 +838,48 @@ const Home: React.FC = () => {
 
   // Load schema
   async function loadSchema() {
+    if (!lastEndpoint.trim()) {
+      setSchemaStatus("idle");
+      schemaRef.current = null;
+      setCanRunOperation(false);
+      return;
+    }
+
     try {
       // Thay fetch() bằng Go bridge
       const res = await SendRequest({
         url: resolveEnvironmentText(lastEndpoint),
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+          "Pragma": "no-cache",
+        },
         body: JSON.stringify({ query: getIntrospectionQuery() }), // ✅ dùng hàm chuẩn của graphql-js
       });
 
       if (res.error) {
-        setSchemaStatus("error");
+        notifyEndpointConnectionError(
+          `Endpoint connection failed: ${res.error}`
+        );
         return;
       }
 
-      const json = JSON.parse(res.body);
+      let json: any;
+
+      try {
+        json = JSON.parse(res.body);
+      } catch {
+        notifyEndpointConnectionError(
+          "Endpoint returned an invalid JSON schema response."
+        );
+        return;
+      }
 
       if (json.errors) {
-        setSchemaStatus("error");
+        notifyEndpointConnectionError(
+          `Endpoint schema error: ${JSON.stringify(json.errors)}`
+        );
         return;
       }
 
@@ -730,6 +887,8 @@ const Home: React.FC = () => {
         JSON.stringify(json.data);
 
       setSchemaStatus("connected");
+      lastEndpointErrorToastRef.current =
+        "";
 
       if (
         lastIntrospectionRef.current ===
@@ -752,6 +911,26 @@ const Home: React.FC = () => {
       setExplorerSchema(
         explorer
       );
+      setCurrentType((previousType) =>
+        previousType &&
+        explorer[previousType]
+          ? previousType
+          : null
+      );
+      setSelectedField((previousField) => {
+        if (
+          !previousField ||
+          !currentType ||
+          !explorer[currentType]
+        ) {
+          return null;
+        }
+
+        return explorer[currentType].fields.find(
+          (field) =>
+            field.name === previousField.name
+        ) ?? null;
+      });
 
       // Update cm6-graphql with real schema
       const graphQLEditor =
@@ -776,8 +955,10 @@ const Home: React.FC = () => {
           operationCanRun(operationView)
         );
       }
-    } catch {
-      setSchemaStatus("error");
+    } catch (error: any) {
+      notifyEndpointConnectionError(
+        `Endpoint schema load failed: ${error?.message || String(error)}`
+      );
     }
   }
 
@@ -800,6 +981,9 @@ const Home: React.FC = () => {
     };
 
     lastIntrospectionRef.current = null;
+    lastEndpointErrorToastRef.current =
+      "";
+    schemaRef.current = null;
     loadSchema();
 
     const intervalId =
@@ -4553,6 +4737,111 @@ const Home: React.FC = () => {
     }
   }
 
+  function formatSubscriptionEvent(
+    event: any
+  ) {
+    if (
+      event?.type === "connected"
+    ) {
+      return JSON.stringify(
+        {
+          status:
+            "listening",
+        },
+        null,
+        2
+      );
+    }
+
+    if (
+      event?.type === "complete"
+    ) {
+      return JSON.stringify(
+        {
+          status:
+            "disconnected",
+        },
+        null,
+        2
+      );
+    }
+
+    if (
+      typeof event?.payload === "string"
+    ) {
+      return formatResponseBody(
+        event.payload
+      );
+    }
+
+    return JSON.stringify(
+      event?.payload ?? event,
+      null,
+      2
+    );
+  }
+
+  function startColumnResize(
+    widths: number[],
+    setWidths: React.Dispatch<React.SetStateAction<number[]>>,
+    index: number,
+    event: React.MouseEvent<HTMLDivElement>
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX =
+      event.clientX;
+    const startWidth =
+      widths[index];
+
+    const handleMouseMove = (
+      moveEvent: MouseEvent
+    ) => {
+      const nextWidth =
+        Math.max(
+          80,
+          startWidth +
+            moveEvent.clientX -
+            startX
+        );
+
+      setWidths((currentWidths) =>
+        currentWidths.map((width, widthIndex) =>
+          widthIndex === index
+            ? nextWidth
+            : width
+        )
+      );
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener(
+        "mousemove",
+        handleMouseMove
+      );
+      window.removeEventListener(
+        "mouseup",
+        handleMouseUp
+      );
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor =
+      "col-resize";
+    document.body.style.userSelect =
+      "none";
+    window.addEventListener(
+      "mousemove",
+      handleMouseMove
+    );
+    window.addEventListener(
+      "mouseup",
+      handleMouseUp
+    );
+  }
+
   function formatResponseDuration(
     duration?: number
   ) {
@@ -5158,7 +5447,11 @@ const Home: React.FC = () => {
           }
         );
         setEditorText("result", "");
-      } catch (error: any) {
+    } catch (error: any) {
+        showToast(
+          "error",
+          `Subscription connection failed: ${error?.message || String(error)}`
+        );
         const nextText =
           JSON.stringify(
             {
@@ -5210,6 +5503,10 @@ const Home: React.FC = () => {
         });
 
       if (res.error) {
+        showToast(
+          "error",
+          `Endpoint request failed: ${res.error}`
+        );
         const nextText =
           JSON.stringify(
             {
@@ -5293,6 +5590,46 @@ const Home: React.FC = () => {
             ? previousScrollTop
             : 0;
       });
+    } catch (error: any) {
+      const message =
+        error?.message ||
+        String(error);
+      const nextText =
+        JSON.stringify(
+          {
+            errors: [
+              {
+                message,
+              },
+            ],
+          },
+          null,
+          2
+        );
+
+      showToast(
+        "error",
+        `Endpoint request failed: ${message}`
+      );
+      updateWorkTab(
+        activeWorkTabId,
+        {
+          response:
+            nextText,
+          responseStatus:
+            "Request failed",
+          responseStatusCode:
+            undefined,
+          responseHeaders:
+            {},
+          responseCookies:
+            [],
+        }
+      );
+      setEditorText(
+        "result",
+        nextText
+      );
     } finally {
       setIsRunningOperation(false);
       setCanRunOperation(
@@ -5314,11 +5651,28 @@ const Home: React.FC = () => {
           }
 
           const nextText =
-            JSON.stringify(
-              event?.payload ?? event,
-              null,
-              2
+            formatSubscriptionEvent(
+              event
             );
+          const isTerminalEvent =
+            event?.type === "complete" ||
+            event?.type === "error";
+          const matchedTab =
+            workTabs.find(
+              (tab) =>
+                tab.subscriptionId ===
+                subscriptionId
+            );
+
+          if (
+            matchedTab &&
+            event?.type === "error"
+          ) {
+            showToast(
+              "error",
+              `Subscription disconnected: ${event?.error || nextText}`
+            );
+          }
 
           setWorkTabs((currentTabs) =>
             currentTabs.map((tab) =>
@@ -5331,6 +5685,20 @@ const Home: React.FC = () => {
                     "body",
                   responseSize:
                     nextText.length,
+                  subscriptionListening:
+                    isTerminalEvent
+                      ? false
+                      : tab.subscriptionListening,
+                  subscriptionId:
+                    isTerminalEvent
+                      ? undefined
+                      : tab.subscriptionId,
+                  responseStatus:
+                    isTerminalEvent
+                      ? event?.type === "error"
+                        ? "Subscription error"
+                        : "Disconnected"
+                      : tab.responseStatus,
                 }
                 : tab
             )
@@ -7822,6 +8190,12 @@ const Home: React.FC = () => {
       const result =
         await OpenJSONFile();
 
+      if (
+        !result?.path
+      ) {
+        return;
+      }
+
       const payload =
         JSON.parse(result.content) as CollectionExportPayload;
 
@@ -7906,33 +8280,86 @@ const Home: React.FC = () => {
         [],
     };
 
-    await persistEnvironmentStore({
-      activeEnvironmentId:
-        nextEnvironment.id,
-      environments: [
-        ...environmentStore.environments,
-        nextEnvironment,
-      ],
-    });
-    setEditingEnvironmentId(
-      nextEnvironment.id
+    setEnvironmentEditorDraft(
+      nextEnvironment
     );
     setEnvironmentEditorOpen(true);
     setEnvironmentMenuOpen(false);
   }
 
-  async function updateEnvironment(
+  function updateEnvironmentEditorDraft(
     environment: EnvironmentItem
   ) {
+    setEnvironmentEditorDraft(
+      environment
+    );
+  }
+
+  function openEnvironmentEditor(
+    environment: EnvironmentItem
+  ) {
+    setEnvironmentEditorDraft({
+      ...environment,
+      variables:
+        environment.variables.map((variable) => ({
+          ...variable,
+        })),
+    });
+    setEnvironmentEditorOpen(true);
+    setEnvironmentMenuOpen(false);
+  }
+
+  function closeEnvironmentEditor() {
+    setEnvironmentEditorOpen(false);
+    setEnvironmentEditorDraft(null);
+  }
+
+  async function saveEnvironmentEditorDraft() {
+    if (!environmentEditorDraft) {
+      return;
+    }
+
+    const trimmedName =
+      environmentEditorDraft.name.trim();
+
+    if (!trimmedName) {
+      showToast(
+        "error",
+        "Environment name is required."
+      );
+      return;
+    }
+
+    const nextEnvironment = {
+      ...environmentEditorDraft,
+      name:
+        trimmedName,
+    };
+
+    const exists =
+      environmentStore.environments.some(
+        (environment) =>
+          environment.id ===
+          nextEnvironment.id
+      );
+
     await persistEnvironmentStore({
       ...environmentStore,
+      activeEnvironmentId:
+        nextEnvironment.id,
       environments:
-        environmentStore.environments.map((item) =>
-          item.id === environment.id
-            ? environment
-            : item
-        ),
+        exists
+          ? environmentStore.environments.map((item) =>
+            item.id === nextEnvironment.id
+              ? nextEnvironment
+              : item
+          )
+          : [
+            ...environmentStore.environments,
+            nextEnvironment,
+          ],
     });
+    closeEnvironmentEditor();
   }
 
   async function exportEnvironmentStore() {
@@ -7959,6 +8386,13 @@ const Home: React.FC = () => {
     try {
       const result =
         await OpenJSONFile();
+
+      if (
+        !result?.path
+      ) {
+        return;
+      }
+
       const payload =
         JSON.parse(result.content);
 
@@ -8017,15 +8451,31 @@ const Home: React.FC = () => {
   }
 
   async function syncToGoogleDrive() {
+    if (cloudActionLoading) {
+      return;
+    }
+
+    setCloudActionLoading("push");
     try {
       const state =
         await SyncAllWorkspacesToGoogleDrive();
       setCloudSyncState(
         state as CloudSyncState
       );
+
+      if ((state as CloudSyncState).status === "error") {
+        showToast(
+          "error",
+          (state as CloudSyncState).message || "Failed to sync Google Drive."
+        );
+        return;
+      }
+
       showToast("success", "Google Drive sync completed.");
     } catch {
       showToast("error", "Failed to sync Google Drive.");
+    } finally {
+      setCloudActionLoading(null);
     }
   }
 
@@ -8043,16 +8493,171 @@ const Home: React.FC = () => {
   }
 
   async function pullFromGoogleDrive() {
+    if (cloudActionLoading) {
+      return;
+    }
+
+    setCloudActionLoading("pull");
     try {
       const state =
         await PullWorkspacesFromGoogleDrive();
       setCloudSyncState(
         state as CloudSyncState
       );
+
+      if ((state as CloudSyncState).status === "error") {
+        showToast(
+          "error",
+          (state as CloudSyncState).message || "Failed to pull from Google Drive."
+        );
+        return;
+      }
+
       await refreshSavedAPIs();
       showToast("success", "Pulled collection data from Google Drive.");
     } catch {
       showToast("error", "Failed to pull from Google Drive.");
+    } finally {
+      setCloudActionLoading(null);
+    }
+  }
+
+  function toggleBugReportTag(
+    tagId: string
+  ) {
+    setBugReportDraft((draft) => ({
+      ...draft,
+      tags:
+        draft.tags.includes(tagId)
+          ? draft.tags.filter((item) => item !== tagId)
+          : [
+            ...draft.tags,
+            tagId,
+          ],
+    }));
+  }
+
+  async function attachBugReportFile() {
+    if (bugReportDraft.attachments.length >= 3) {
+      showToast("error", "Bug report supports up to 3 attachments.");
+      return;
+    }
+
+    try {
+      const attachment =
+        await OpenBugReportAttachmentFile();
+
+      if (!attachment?.path) {
+        return;
+      }
+
+      if (
+        bugReportDraft.attachments.some(
+          (item) =>
+            item.path === attachment.path
+        )
+      ) {
+        showToast("error", "This attachment is already added.");
+        return;
+      }
+
+      setBugReportDraft((draft) => ({
+        ...draft,
+        attachments: [
+          ...draft.attachments,
+          attachment,
+        ],
+      }));
+    } catch (error: any) {
+      showToast(
+        "error",
+        error?.message || String(error) || "Failed to attach file."
+      );
+    }
+  }
+
+  function removeBugReportAttachment(
+    path: string
+  ) {
+    setBugReportDraft((draft) => ({
+      ...draft,
+      attachments:
+        draft.attachments.filter(
+          (attachment) =>
+            attachment.path !== path
+        ),
+    }));
+  }
+
+  async function submitBugReport() {
+    const title =
+      bugReportDraft.title.trim();
+    const description =
+      bugReportDraft.description.trim();
+    const deviceOs =
+      bugReportDraft.deviceOs.trim();
+
+    if (!title) {
+      showToast("error", "Bug report title is required.");
+      return;
+    }
+
+    if (!description) {
+      showToast("error", "Bug description is required.");
+      return;
+    }
+
+    if (title.length > 100) {
+      showToast("error", "Bug report title must be 100 characters or fewer.");
+      return;
+    }
+
+    if (description.length > 2000) {
+      showToast("error", "Bug description must be 2000 characters or fewer.");
+      return;
+    }
+
+    if (!deviceOs) {
+      showToast("error", "Device / OS is required.");
+      return;
+    }
+
+    if (deviceOs.length > 100) {
+      showToast("error", "Device / OS must be 100 characters or fewer.");
+      return;
+    }
+
+    setBugReportSubmitting(true);
+    try {
+      await SubmitBugReport({
+        title,
+        description,
+        deviceOs,
+        tags:
+          bugReportDraft.tags,
+        attachments:
+          bugReportDraft.attachments,
+      } as any);
+      setBugReportOpen(false);
+      setBugReportDraft((draft) => ({
+        ...draft,
+        title:
+          "",
+        description:
+          "",
+        tags:
+          [],
+        attachments:
+          [],
+      }));
+      showToast("success", "Bug report sent.");
+    } catch (error: any) {
+      showToast(
+        "error",
+        error?.message || String(error) || "Failed to send bug report."
+      );
+    } finally {
+      setBugReportSubmitting(false);
     }
   }
 
@@ -8754,6 +9359,33 @@ const Home: React.FC = () => {
         >
           {renderCloudIcon()}
         </button>
+        <div className="relative mt-auto w-full" ref={settingsMenuRef}>
+          <button
+            type="button"
+            onClick={() =>
+              setSettingsMenuOpen((open) => !open)
+            }
+            className="flex h-[48px] w-full items-center justify-center text-white/35 hover:text-white/80"
+            title="Settings"
+          >
+            <Settings size={24} />
+          </button>
+          {settingsMenuOpen && (
+            <div className="fixed bottom-3 left-[58px] z-[120] w-[180px] rounded-[6px] border border-gray-1 bg-black-2 py-1 text-left shadow-2xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setSettingsMenuOpen(false);
+                  setBugReportOpen(true);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-white/70 hover:bg-white/10 hover:text-white"
+              >
+                <Bug size={15} />
+                Report bug
+              </button>
+            </div>
+          )}
+        </div>
       </div>
       {/* body */}
       <Group orientation="horizontal" className="h-full min-h-0">
@@ -8779,13 +9411,13 @@ const Home: React.FC = () => {
                   </div>
                 )}
               {sidebarMode !== "collections" && (
-                <div className='w-full rounded-md outline outline-1 outline-gray-1/50 bg-gray-3 flex pl-2 gap-0.5'>
+                <div className='w-full rounded-md outline outline-1 outline-gray-1/50 bg-gray-3 flex pl-2 gap-2'>
                   <div className={`w-2.5 h-2.5 min-w-2.5 min-h-2.5 rounded-full my-auto ${schemaStatus === "error"
                     ? "bg-red-500"
                     : "bg-green-1"
                     }`}></div>
                   <div className="relative min-w-0 flex-1">
-                    <div className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre rounded-sm p-2 font-inherit text-white">
+                    <div className="pointer-events-none absolute inset-0 flex items-center overflow-hidden whitespace-pre rounded-sm px-2 text-left font-inherit text-white">
                       {lastEndpoint
                         ? renderHighlightedEnvironmentText(lastEndpoint)
                         : <span className="text-white/30">Enter URL</span>}
@@ -8795,8 +9427,9 @@ const Home: React.FC = () => {
                       onChange={e => { dispatch(setEndpoint(e.target.value)) }}
                       spellCheck={false}
                       list="environment-variable-options"
-                      className='relative w-full rounded-sm p-2 bg-transparent text-transparent caret-white outline-none'
-                      placeholder='Enter URL'
+                      className='relative h-10 w-full rounded-sm px-2 bg-transparent text-left text-transparent caret-white outline-none placeholder:text-transparent'
+                      placeholder=''
+                      aria-label="Endpoint URL"
                     />
                   </div>
                   <datalist id="environment-variable-options">
@@ -9538,7 +10171,7 @@ const Home: React.FC = () => {
               </button>
             </div>
 
-            <div className="relative">
+            <div className="relative" ref={environmentMenuRef}>
               <button
                 type="button"
                 onClick={() =>
@@ -9613,9 +10246,7 @@ const Home: React.FC = () => {
                           <button
                             type="button"
                             onClick={() => {
-                              setEditingEnvironmentId(environment.id);
-                              setEnvironmentEditorOpen(true);
-                              setEnvironmentMenuOpen(false);
+                              openEnvironmentEditor(environment);
                             }}
                             className="mr-1 hidden h-7 w-7 items-center justify-center rounded-[4px] text-white/45 hover:bg-white/10 hover:text-white group-hover:flex"
                             title="Edit"
@@ -9628,9 +10259,6 @@ const Home: React.FC = () => {
                   <div className="flex items-center justify-end gap-1 border-t border-gray-2 p-2">
                     <button type="button" onClick={importEnvironmentStore} className="rounded-[4px] px-2 py-1 text-xs font-semibold text-white/60 hover:bg-white/10 hover:text-white">
                       Import
-                    </button>
-                    <button type="button" onClick={exportEnvironmentStore} className="rounded-[4px] px-2 py-1 text-xs font-semibold text-white/60 hover:bg-white/10 hover:text-white">
-                      Export
                     </button>
                   </div>
                 </div>
@@ -9659,18 +10287,27 @@ const Home: React.FC = () => {
                         onMouseEnter={() => setIsRunButtonHovered(true)}
                         onMouseLeave={() => setIsRunButtonHovered(false)}
                         className={`
-                          inline-flex items-center gap-2 rounded-[4px] max-w-[118px] min-w-[85px] px-4 pl-3 py-1
-                          font-semibold transition-colors
+                          inline-flex h-8 min-w-[92px] items-center justify-center gap-2 rounded-[4px] px-3
+                          text-sm font-semibold leading-none transition-colors
                           ${(canRunOperation || activeWorkTab.subscriptionListening) && !isRunningOperation
                             ? activeWorkTab.subscriptionListening && isRunButtonHovered
                               ? "bg-red-500/80 text-white hover:bg-red-500 cursor-pointer"
-                              : "bg-green-1/70 text-white hover:bg-green-1 cursor-pointer"
+                              : activeWorkTab.subscriptionListening
+                                ? "bg-orange-400/35 text-orange-50 hover:bg-orange-400/45 cursor-pointer"
+                                : "bg-green-1/70 text-white hover:bg-green-1 cursor-pointer"
                             : "bg-green-1/25 text-white/45 cursor-default"
                           }
                         `}
                       >
-                        <BiCaretRightIcon size={20} />
-                        {isRunningOperation ? <div className="mx-auto my-0.5">
+                        {!isRunningOperation && activeWorkTab.subscriptionListening ? (
+                          <span className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white/70 opacity-75" />
+                            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-white" />
+                          </span>
+                        ) : !isRunningOperation ? (
+                          <BiCaretRightIcon size={18} className="shrink-0" />
+                        ) : null}
+                        {isRunningOperation ? <div className="mx-auto">
                           <div className="w-5 h-5 border-2 border-white border-t-black-1 rounded-full animate-spin" />
                         </div> : activeWorkTab.subscriptionListening
                           ? isRunButtonHovered
@@ -9872,12 +10509,36 @@ const Home: React.FC = () => {
                   />
                   {activeWorkTab.responsePanelTab === "cookies" && (
                     <OverlayScrollbarsComponent className="absolute inset-0" options={overlayScrollOptions} defer>
-                      <table className="w-full table-fixed border-collapse text-left text-sm">
+                      <table
+                        className="border-collapse text-left text-sm"
+                        style={{
+                          width:
+                            "100%",
+                          minWidth:
+                            cookieColumnWidths.reduce((total, width) => total + width, 0),
+                        }}
+                      >
+                        <colgroup>
+                          {cookieColumnWidths.map((width, index) => (
+                            <col key={index} style={{ width }} />
+                          ))}
+                        </colgroup>
                         <thead className="text-white/60">
                           <tr>
-                            {["Name", "Value", "Domain", "Path", "Expires", "HttpOnly", "Secure"].map((header) => (
-                              <th key={header} style={{ resize: "horizontal", overflow: "auto" }} className="border-r border-b border-gray-2 px-3 py-2 font-semibold last:border-r">
+                            {["Name", "Value", "Domain", "Path", "Expires", "HttpOnly", "Secure"].map((header, index) => (
+                              <th key={header} className="relative border-r border-b border-gray-2 px-3 py-2 font-semibold last:border-r">
                                 {header}
+                                <div
+                                  className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-green-1/70"
+                                  onMouseDown={(event) =>
+                                    startColumnResize(
+                                      cookieColumnWidths,
+                                      setCookieColumnWidths,
+                                      index,
+                                      event
+                                    )
+                                  }
+                                />
                               </th>
                             ))}
                           </tr>
@@ -9891,13 +10552,13 @@ const Home: React.FC = () => {
                             </tr>
                           ) : activeWorkTab.responseCookies.map((cookie) => (
                             <tr key={`${cookie.name}-${cookie.domain}-${cookie.path}`} className="text-white/80">
-                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{cookie.name}</td>
-                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{cookie.value}</td>
-                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{cookie.domain}</td>
-                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{cookie.path}</td>
-                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{cookie.expires}</td>
-                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{String(cookie.httpOnly)}</td>
-                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{String(cookie.secure)}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 whitespace-nowrap">{cookie.name}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 whitespace-nowrap">{cookie.value}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 whitespace-nowrap">{cookie.domain}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 whitespace-nowrap">{cookie.path}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 whitespace-nowrap">{cookie.expires}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 whitespace-nowrap">{String(cookie.httpOnly)}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 whitespace-nowrap">{String(cookie.secure)}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -9906,11 +10567,38 @@ const Home: React.FC = () => {
                   )}
                   {activeWorkTab.responsePanelTab === "headers" && (
                     <OverlayScrollbarsComponent className="absolute inset-0" options={overlayScrollOptions} defer>
-                      <table className="w-full table-fixed border-collapse text-left text-sm">
+                      <table
+                        className="border-collapse text-left text-sm"
+                        style={{
+                          width:
+                            "100%",
+                          minWidth:
+                            headerColumnWidths.reduce((total, width) => total + width, 0),
+                        }}
+                      >
+                        <colgroup>
+                          {headerColumnWidths.map((width, index) => (
+                            <col key={index} style={{ width }} />
+                          ))}
+                        </colgroup>
                         <thead className="text-white/60">
                           <tr>
-                            <th style={{ resize: "horizontal", overflow: "auto" }} className="border-r border-b border-gray-2 px-3 py-2 font-semibold">Name</th>
-                            <th style={{ resize: "horizontal", overflow: "auto" }} className="border-r border-b border-gray-2 px-3 py-2 font-semibold">Value</th>
+                            {["Name", "Value"].map((header, index) => (
+                              <th key={header} className="relative border-r border-b border-gray-2 px-3 py-2 font-semibold">
+                                {header}
+                                <div
+                                  className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-green-1/70"
+                                  onMouseDown={(event) =>
+                                    startColumnResize(
+                                      headerColumnWidths,
+                                      setHeaderColumnWidths,
+                                      index,
+                                      event
+                                    )
+                                  }
+                                />
+                              </th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody>
@@ -9922,8 +10610,8 @@ const Home: React.FC = () => {
                             </tr>
                           ) : Object.entries(activeWorkTab.responseHeaders).map(([name, value]) => (
                             <tr key={name} className="text-white/80">
-                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{name}</td>
-                              <td className="border-r border-b border-gray-2 px-3 py-2 truncate">{value}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 whitespace-nowrap">{name}</td>
+                              <td className="border-r border-b border-gray-2 px-3 py-2 whitespace-nowrap">{value}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -10311,7 +10999,7 @@ const Home: React.FC = () => {
               <input
                 value={editingEnvironment.name}
                 onChange={(event) =>
-                  updateEnvironment({
+                  updateEnvironmentEditorDraft({
                     ...editingEnvironment,
                     name:
                       event.target.value,
@@ -10319,13 +11007,22 @@ const Home: React.FC = () => {
                 }
                 className="h-9 min-w-0 flex-1 bg-transparent text-base font-semibold text-white outline-none"
               />
-              <button
-                type="button"
-                onClick={() => setEnvironmentEditorOpen(false)}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] text-white/60 hover:bg-white/10 hover:text-white"
-              >
-                <X size={16} />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={exportEnvironmentStore}
+                  className="inline-flex h-8 items-center rounded-[4px] px-2 text-sm font-semibold text-white/60 hover:bg-white/10 hover:text-white"
+                >
+                  Export
+                </button>
+                <button
+                  type="button"
+                  onClick={closeEnvironmentEditor}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] text-white/60 hover:bg-white/10 hover:text-white"
+                >
+                  <X size={16} />
+                </button>
+              </div>
             </div>
             <div className="mt-4 overflow-hidden rounded-[4px] border border-gray-2">
               <div className="grid grid-cols-2 border-b border-gray-2 bg-white/5 text-sm font-semibold text-white/60">
@@ -10337,7 +11034,7 @@ const Home: React.FC = () => {
                   <input
                     value={variable.key}
                     onChange={(event) =>
-                      updateEnvironment({
+                      updateEnvironmentEditorDraft({
                         ...editingEnvironment,
                         variables:
                           editingEnvironment.variables.map((item) =>
@@ -10357,7 +11054,7 @@ const Home: React.FC = () => {
                   <input
                     value={variable.value}
                     onChange={(event) =>
-                      updateEnvironment({
+                      updateEnvironmentEditorDraft({
                         ...editingEnvironment,
                         variables:
                           editingEnvironment.variables.map((item) =>
@@ -10379,7 +11076,7 @@ const Home: React.FC = () => {
               <button
                 type="button"
                 onClick={() =>
-                  updateEnvironment({
+                  updateEnvironmentEditorDraft({
                     ...editingEnvironment,
                     variables: [
                       ...editingEnvironment.variables,
@@ -10399,11 +11096,34 @@ const Home: React.FC = () => {
                 Add variable
               </button>
             </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeEnvironmentEditor}
+                className="rounded-[4px] px-3 py-1.5 text-sm font-semibold text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveEnvironmentEditorDraft}
+                className="rounded-[4px] bg-green-1/75 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-1"
+              >
+                Save
+              </button>
+            </div>
           </div>
         </div>
       )}
       {cloudDialogOpen && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-5">
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-5"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setCloudDialogOpen(false);
+            }
+          }}
+        >
           <div className="w-[480px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
             <div className="flex items-center justify-between">
               <div>
@@ -10486,23 +11206,46 @@ const Home: React.FC = () => {
             )}
             <div className="mt-4 rounded-[4px] border border-gray-2 bg-black-1 p-3 text-sm text-white/65">
               <div>Status: <span className="font-semibold text-white">{cloudSyncState.status}</span></div>
+              {googleConfig.accountEmail && (
+                <div className="mt-1">
+                  Account: <span className="font-semibold text-white">{googleConfig.accountEmail}</span>
+                </div>
+              )}
               {cloudSyncState.message && <div className="mt-1">{cloudSyncState.message}</div>}
               <div className="mt-1 text-xs text-white/40">
                 Local v{cloudSyncState.localVersion || 0} / Cloud v{cloudSyncState.cloudVersion || 0}
               </div>
             </div>
             <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <button type="button" onClick={requestGoogleDriveAccess} className="rounded-[4px] px-3 py-1.5 text-sm font-semibold text-white/70 hover:bg-white/10 hover:text-white">
-                Connect
-              </button>
-              {cloudSyncState.status === "pull_available" && (
-                <button type="button" onClick={pullFromGoogleDrive} className="rounded-[4px] bg-amber-500/80 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-500">
-                  Pull
+              {!googleDriveConnected && (
+                <button type="button" onClick={requestGoogleDriveAccess} className="rounded-[4px] px-3 py-1.5 text-sm font-semibold text-white/70 hover:bg-white/10 hover:text-white">
+                  Connect
                 </button>
               )}
-              {cloudSyncState.status === "pending" && (
-                <button type="button" onClick={syncToGoogleDrive} className="rounded-[4px] bg-green-1/75 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-1">
-                  Push
+              {googleDriveConnected && cloudSyncState.status === "pull_available" && (
+                <button
+                  type="button"
+                  onClick={pullFromGoogleDrive}
+                  disabled={!!cloudActionLoading}
+                  className="inline-flex items-center gap-2 rounded-[4px] bg-amber-500/80 px-3 py-1.5 text-sm font-semibold text-white hover:bg-amber-500 disabled:cursor-default disabled:opacity-70"
+                >
+                  {cloudActionLoading === "pull" && (
+                    <span className="h-4 w-4 rounded-full border-2 border-white/80 border-t-transparent animate-spin" />
+                  )}
+                  <span>Pull</span>
+                </button>
+              )}
+              {googleDriveConnected && cloudSyncState.status === "pending" && (
+                <button
+                  type="button"
+                  onClick={syncToGoogleDrive}
+                  disabled={!!cloudActionLoading}
+                  className="inline-flex items-center gap-2 rounded-[4px] bg-green-1/75 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-1 disabled:cursor-default disabled:opacity-70"
+                >
+                  {cloudActionLoading === "push" && (
+                    <span className="h-4 w-4 rounded-full border-2 border-white/80 border-t-transparent animate-spin" />
+                  )}
+                  <span>Push</span>
                 </button>
               )}
             </div>
@@ -10510,7 +11253,14 @@ const Home: React.FC = () => {
         </div>
       )}
       {saveDialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-5">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-5"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setSaveDialogOpen(false);
+            }
+          }}
+        >
           <div className="w-[460px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
             <div className="text-base font-semibold text-white">
               Save API
@@ -10530,7 +11280,7 @@ const Home: React.FC = () => {
                   className="mt-1 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
                 />
               </label>
-              <label className="block text-sm font-semibold text-white/70">
+              <div className="block text-sm font-semibold text-white/70">
                 <div className="flex items-center justify-between">
                   <span>Location</span>
                   <div className="flex items-center gap-1">
@@ -10570,12 +11320,6 @@ const Home: React.FC = () => {
                     </button>
                   </div>
                 </div>
-                <div className="mt-1 flex items-center gap-2">
-                  <div className="min-w-0 flex-1 truncate rounded-[4px] border border-gray-1 bg-gray-3 px-2 py-2 text-sm text-white/80">
-                    {saveDialogDraft.collection || "Default"}
-                    {saveDialogDraft.folder ? ` / ${saveDialogDraft.folder}` : ""}
-                  </div>
-                </div>
                 <div className="mt-2">
                   {renderSaveLocationPicker()}
                 </div>
@@ -10587,7 +11331,7 @@ const Home: React.FC = () => {
                     />
                   ))}
                 </datalist>
-              </label>
+              </div>
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button
@@ -10612,14 +11356,193 @@ const Home: React.FC = () => {
           </div>
         </div>
       )}
+      {bugReportOpen && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/55 px-5"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setBugReportOpen(false);
+            }
+          }}
+        >
+          <div className="w-[520px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div className="text-base font-semibold text-white">
+                Report bug
+              </div>
+              <button
+                type="button"
+                onClick={() => setBugReportOpen(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="mt-4 space-y-3">
+              <label className="block text-sm font-semibold text-white/70">
+                <span className="flex items-center justify-between gap-2">
+                  <span>Title</span>
+                  <span className="text-xs text-white/35">
+                    {bugReportDraft.title.length}/100
+                  </span>
+                </span>
+                <input
+                  value={bugReportDraft.title}
+                  maxLength={100}
+                  onChange={(event) =>
+                    setBugReportDraft((draft) => ({
+                      ...draft,
+                      title:
+                        event.target.value,
+                    }))
+                  }
+                  className="mt-1 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
+                />
+              </label>
+              <label className="block text-sm font-semibold text-white/70">
+                Bug description
+                <textarea
+                  value={bugReportDraft.description}
+                  maxLength={2000}
+                  onChange={(event) =>
+                    setBugReportDraft((draft) => ({
+                      ...draft,
+                      description:
+                        event.target.value,
+                    }))
+                  }
+                  className="mt-1 min-h-[130px] w-full resize-y rounded-[4px] border border-gray-1 bg-gray-3 px-2 py-2 text-white outline-none focus:border-green-1"
+                />
+                <div className="mt-1 text-right text-xs text-white/35">
+                  {bugReportDraft.description.length}/2000
+                </div>
+              </label>
+              <label className="block text-sm font-semibold text-white/70">
+                Device / OS
+                <input
+                  value={bugReportDraft.deviceOs}
+                  maxLength={100}
+                  onChange={(event) =>
+                    setBugReportDraft((draft) => ({
+                      ...draft,
+                      deviceOs:
+                        event.target.value,
+                    }))
+                  }
+                  className="mt-1 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
+                />
+                <div className="mt-1 text-right text-xs text-white/35">
+                  {bugReportDraft.deviceOs.length}/100
+                </div>
+              </label>
+              <div className="text-sm font-semibold text-white/70">
+                Tags
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {bugReportTagOptions.map((tag) => {
+                    const checked =
+                      bugReportDraft.tags.includes(tag.id);
+                    return (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onClick={() => toggleBugReportTag(tag.id)}
+                        className={`rounded-[4px] border px-2.5 py-1 text-sm font-semibold transition-colors ${
+                          checked
+                            ? "border-green-1/60 bg-green-1/20 text-green-100"
+                            : "border-gray-1 bg-gray-3 text-white/60 hover:border-white/25 hover:text-white"
+                        }`}
+                      >
+                        {tag.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="text-sm font-semibold text-white/70">
+                Attachments
+                <div className="mt-2 rounded-[4px] border border-gray-1/70 bg-black-1 p-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-xs font-medium text-white/40">
+                      Images/videos, max 3 files, 10MB each
+                    </span>
+                    <button
+                      type="button"
+                      onClick={attachBugReportFile}
+                      disabled={bugReportDraft.attachments.length >= 3}
+                      className="inline-flex h-7 items-center gap-1.5 rounded-[4px] bg-white/10 px-2 text-xs font-semibold text-white/70 hover:bg-white/15 hover:text-white disabled:cursor-default disabled:opacity-45"
+                    >
+                      <Upload size={14} />
+                      Attach
+                    </button>
+                  </div>
+                  {bugReportDraft.attachments.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {bugReportDraft.attachments.map((attachment) => (
+                        <div
+                          key={attachment.path}
+                          className="flex items-center gap-2 rounded-[4px] bg-white/5 px-2 py-1.5 text-xs text-white/70"
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            {attachment.name}
+                          </span>
+                          <span className="shrink-0 text-white/35">
+                            {formatResponseSize(attachment.size)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeBugReportAttachment(attachment.path)}
+                            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[4px] text-white/45 hover:bg-white/10 hover:text-white"
+                            title="Remove attachment"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setBugReportOpen(false)}
+                className="rounded-[4px] px-3 py-1.5 text-sm font-semibold text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitBugReport}
+                disabled={bugReportSubmitting}
+                className="inline-flex items-center gap-2 rounded-[4px] bg-green-1/75 px-3 py-1.5 text-sm font-semibold text-white hover:bg-green-1 disabled:cursor-default disabled:opacity-70"
+              >
+                {bugReportSubmitting && (
+                  <span className="h-4 w-4 rounded-full border-2 border-white/80 border-t-transparent animate-spin" />
+                )}
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="fixed bottom-4 right-4 z-[100] flex w-[360px] max-w-[calc(100vw-32px)] flex-col gap-2">
         {appToasts.map((toast) => (
           <div
             key={toast.id}
+            onClick={() =>
+              setAppToasts((items) =>
+                items.filter((item) =>
+                  item.id !== toast.id
+                )
+              )
+            }
+            role="button"
+            tabIndex={0}
             className={`rounded-[6px] border px-3 py-2 text-sm shadow-2xl ${
               toast.type === "success"
                 ? "border-green-1/40 bg-green-1/15 text-green-100"
-                : "border-red-500/40 bg-red-500/15 text-red-100"
+                : "cursor-pointer border-red-500/40 bg-red-500/15 text-red-100"
             }`}
           >
             {toast.message}
