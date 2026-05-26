@@ -9,6 +9,10 @@
     scrollbar-gutter: stable;
   }
 
+  body {
+    @apply bg-black-1
+  }
+
   *:hover {
     scrollbar-color: rgba(190, 197, 208, 0.7) rgba(255, 255, 255, 0.04);
   }

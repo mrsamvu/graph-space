@@ -5,7 +5,7 @@ import { BiCaretRight, BiCollection } from "react-icons/bi";
 import { RxFileText } from "react-icons/rx";
 import { CiCloudOn } from "react-icons/ci";
 import { Group, Panel, Separator } from "react-resizable-panels";
-import { ArrowRight, Bug, Check, ChevronDown, ChevronRight, Clock, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Database, Download, Edit3, Pin, Plus, Search, Settings, Upload, X } from 'lucide-react';
+import { ArrowRight, Bug, Check, ChevronDown, ChevronRight, Clock, CloudCheck, CloudDownload, CloudOff, CloudUpload, Copy, Database, Download, Edit3, FileText, Pin, Plus, Search, Settings, Upload, X } from 'lucide-react';
 import { useDispatch, useSelector } from 'react-redux';
 import { setEndpoint } from './redux/slices/home.slice';
 import { RootState } from '@/redux/store';
@@ -184,6 +184,7 @@ type WorkspaceTab = {
   subscriptionId?: string;
   subscriptionListening?: boolean;
   pinned?: boolean;
+  cursorPosition?: number;
   isDirty: boolean;
 };
 
@@ -314,6 +315,65 @@ const createWorkspaceTab = (
   isDirty: false,
 });
 
+const workspaceSessionStorageKey =
+  "graph-space-workspace-session-v1";
+
+type WorkspaceSessionState = {
+  workTabs: WorkspaceTab[];
+  activeWorkTabId: string;
+};
+
+function loadWorkspaceSessionState(): WorkspaceSessionState | null {
+  try {
+    const raw =
+      window.localStorage.getItem(
+        workspaceSessionStorageKey
+      );
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed =
+      JSON.parse(raw) as WorkspaceSessionState;
+
+    if (
+      !Array.isArray(parsed.workTabs) ||
+      parsed.workTabs.length === 0
+    ) {
+      return null;
+    }
+
+    return {
+      ...parsed,
+      workTabs:
+        parsed.workTabs.map((tab) => ({
+          ...createWorkspaceTab(1),
+          ...tab,
+          subscriptionId:
+            undefined,
+          subscriptionListening:
+            false,
+        })),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveWorkspaceSessionState(
+  state: WorkspaceSessionState
+) {
+  try {
+    window.localStorage.setItem(
+      workspaceSessionStorageKey,
+      JSON.stringify(state)
+    );
+  } catch {
+    return;
+  }
+}
+
 const Home: React.FC = () => {
   const editorDomRef = useRef<HTMLDivElement>(null);
   const variablesDomRef = useRef<HTMLDivElement>(null);
@@ -330,6 +390,7 @@ const Home: React.FC = () => {
   const lastEndpointErrorToastRef = useRef("");
   const editorViewRef = useRef<Record<string, EditorView>>({});
   const schemaRef = useRef<GraphQLSchema | null>(null);
+  const [endpointDraft, setEndpointDraft] = useState(lastEndpoint);
   const [canRunOperation, setCanRunOperation] = useState(false);
   const [isRunningOperation, setIsRunningOperation] = useState(false);
   const [responseCopied, setResponseCopied] = useState(false);
@@ -429,10 +490,15 @@ const Home: React.FC = () => {
     collection: "Default",
     folder: "",
   });
-  const [workTabs, setWorkTabs] = useState<WorkspaceTab[]>(() => [
-    createWorkspaceTab(1),
-  ]);
+  const [selectedTreeItemIds, setSelectedTreeItemIds] = useState<string[]>([]);
+  const [lastSelectedTreeItemId, setLastSelectedTreeItemId] = useState<string | null>(null);
+  const [workTabs, setWorkTabs] = useState<WorkspaceTab[]>(() =>
+    loadWorkspaceSessionState()?.workTabs ?? [
+      createWorkspaceTab(1),
+    ]
+  );
   const [activeWorkTabId, setActiveWorkTabId] = useState(() =>
+    loadWorkspaceSessionState()?.activeWorkTabId ||
     workTabs[0].id
   );
 
@@ -508,10 +574,102 @@ const Home: React.FC = () => {
     []
   );
 
+  function getWorkspaceSessionSnapshot(): WorkspaceSessionState {
+    const operationView =
+      editorViewRef.current["operation"];
+
+    const nextTabs =
+      workTabs.map((tab) =>
+        tab.id === activeWorkTabId
+          ? {
+            ...tab,
+            operation:
+              getEditorText("operation") || tab.operation,
+            variables:
+              getEditorText("variables") || tab.variables,
+            headers:
+              getEditorText("headers") || tab.headers,
+            response:
+              getEditorText("result") || tab.response,
+            cursorPosition:
+              operationView?.state.selection.main.head ??
+              tab.cursorPosition,
+            subscriptionId:
+              undefined,
+            subscriptionListening:
+              false,
+          }
+          : {
+            ...tab,
+            subscriptionId:
+              undefined,
+            subscriptionListening:
+              false,
+          }
+      );
+
+    return {
+      workTabs:
+        nextTabs,
+      activeWorkTabId,
+    };
+  }
+
+  useEffect(() => {
+    const timeoutId =
+      window.setTimeout(() => {
+        saveWorkspaceSessionState(
+          getWorkspaceSessionSnapshot()
+        );
+      }, 300);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [workTabs, activeWorkTabId]);
+
+  useEffect(() => {
+    const persistBeforeUnload = () => {
+      saveWorkspaceSessionState(
+        getWorkspaceSessionSnapshot()
+      );
+    };
+
+    window.addEventListener(
+      "beforeunload",
+      persistBeforeUnload
+    );
+
+    return () => {
+      window.removeEventListener(
+        "beforeunload",
+        persistBeforeUnload
+      );
+      persistBeforeUnload();
+    };
+  }, [workTabs, activeWorkTabId]);
+
   useEffect(() => {
     environmentVariablesRef.current =
       environmentVariables;
   }, [environmentVariables]);
+
+  useEffect(() => {
+    setEndpointDraft(lastEndpoint);
+  }, [lastEndpoint]);
+
+  useEffect(() => {
+    const timeoutId =
+      window.setTimeout(() => {
+        if (endpointDraft !== lastEndpoint) {
+          dispatch(setEndpoint(endpointDraft));
+        }
+      }, 500);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [dispatch, endpointDraft, lastEndpoint]);
 
   function showToast(
     type: AppToast["type"],
@@ -529,16 +687,14 @@ const Home: React.FC = () => {
       },
     ]);
 
-    if (type === "success") {
-      window.setTimeout(() => {
-        setAppToasts((items) =>
-          items.filter(
-            (item) =>
-              item.id !== id
-          )
-        );
-      }, 3200);
-    }
+    window.setTimeout(() => {
+      setAppToasts((items) =>
+        items.filter(
+          (item) =>
+            item.id !== id
+        )
+      );
+    }, type === "success" ? 3200 : 5200);
   }
 
   function notifyEndpointConnectionError(
@@ -2017,17 +2173,26 @@ const Home: React.FC = () => {
         environmentHighlightField,
         createOperationListener(),
         EditorView.updateListener.of((update) => {
-          if (!update.docChanged) {
+          if (
+            !update.docChanged &&
+            !update.selectionSet
+          ) {
             return;
           }
 
           updateWorkTab(
             mountedTabId,
             {
-              operation:
-                update.state.doc.toString(),
-              isDirty:
-                true,
+              ...(update.docChanged
+                ? {
+                  operation:
+                    update.state.doc.toString(),
+                  isDirty:
+                    true,
+                }
+                : {}),
+              cursorPosition:
+                update.state.selection.main.head,
             }
           );
         }),
@@ -2078,6 +2243,18 @@ const Home: React.FC = () => {
         view,
         schemaRef.current
       );
+    }
+
+    if (
+      activeWorkTab.cursorPosition !== undefined &&
+      activeWorkTab.cursorPosition <= view.state.doc.length
+    ) {
+      view.dispatch({
+        selection: {
+          anchor:
+            activeWorkTab.cursorPosition,
+        },
+      });
     }
 
     syncExplorerCheckboxState(
@@ -5411,7 +5588,7 @@ const Home: React.FC = () => {
           id:
             subscriptionId,
           url:
-            resolveEnvironmentText(lastEndpoint),
+            resolveEnvironmentText(endpointDraft),
           headers: {
             ...resolveEnvironmentValue(requestHeaders),
             "Content-Type": "application/json",
@@ -5489,7 +5666,7 @@ const Home: React.FC = () => {
     try {
       const res =
         await SendRequest({
-          url: resolveEnvironmentText(lastEndpoint),
+          url: resolveEnvironmentText(endpointDraft),
           method: "POST",
           headers: {
             ...resolveEnvironmentValue(requestHeaders),
@@ -7074,6 +7251,8 @@ const Home: React.FC = () => {
           getEditorText("headers"),
         response:
           getEditorText("result"),
+        cursorPosition:
+          editorViewRef.current["operation"]?.state.selection.main.head,
       }
     );
   }
@@ -7142,7 +7321,7 @@ const Home: React.FC = () => {
           draft.folder ||
           "",
         endpoint:
-          lastEndpoint,
+          endpointDraft,
         query:
           snapshot.operation,
         variables:
@@ -7269,7 +7448,7 @@ const Home: React.FC = () => {
     };
   }, [
     activeWorkTab,
-    lastEndpoint,
+    endpointDraft,
     saveDialogDraft,
     sidebarMode,
     selectedSavedAPIId,
@@ -8777,9 +8956,153 @@ const Home: React.FC = () => {
     }
   }, [activeWorkTabId]);
 
+  function getCollectionItemId(
+    collection: string
+  ) {
+    return `collection:${collection}`;
+  }
+
+  function getFolderItemId(
+    collection: string,
+    path: string
+  ) {
+    return `folder:${collection}:${path}`;
+  }
+
+  function getAPIItemId(
+    apiId: string
+  ) {
+    return `api:${apiId}`;
+  }
+
+  function collectVisibleFolderItemIds(
+    collection: string,
+    folders: SavedFolderItem[],
+    parentPath = ""
+  ): string[] {
+    return folders.flatMap((folder) => {
+      const path =
+        parentPath
+          ? `${parentPath}/${folder.name}`
+          : folder.name;
+
+      if (!folderHasVisibleContent(collection, folder, path)) {
+        return [];
+      }
+
+      const folderKey =
+        `${collection}/${path}`;
+      const items = [
+        getFolderItemId(collection, path),
+        ...getAPIsForFolder(collection, path).map((api) =>
+          getAPIItemId(api.id)
+        ),
+      ];
+
+      if (expandedFolders.includes(folderKey)) {
+        items.push(
+          ...collectVisibleFolderItemIds(
+            collection,
+            folder.folders ?? [],
+            path
+          )
+        );
+      }
+
+      return items;
+    });
+  }
+
+  function getVisibleTreeItemIds() {
+    return savedCollections.flatMap((collection) => {
+      const collectionId =
+        getCollectionItemId(collection.name);
+      const isExpanded =
+        expandedCollections.includes(collection.name);
+
+      if (!isExpanded) {
+        return [collectionId];
+      }
+
+      return [
+        collectionId,
+        ...getAPIsForFolder(collection.name, "").map((api) =>
+          getAPIItemId(api.id)
+        ),
+        ...collectVisibleFolderItemIds(
+          collection.name,
+          collection.folders ?? []
+        ),
+      ];
+    });
+  }
+
+  function applyTreeSelection(
+    itemId: string,
+    event:
+      | React.MouseEvent<HTMLElement>
+      | React.KeyboardEvent<HTMLElement>
+  ) {
+    const isRange =
+      event.shiftKey &&
+      lastSelectedTreeItemId;
+    const isToggle =
+      event.ctrlKey ||
+      event.metaKey;
+
+    if (isRange) {
+      const visibleIds =
+        getVisibleTreeItemIds();
+      const from =
+        visibleIds.indexOf(lastSelectedTreeItemId);
+      const to =
+        visibleIds.indexOf(itemId);
+
+      if (from !== -1 && to !== -1) {
+        const [start, end] =
+          from < to
+            ? [from, to]
+            : [to, from];
+        const rangeIds =
+          visibleIds.slice(start, end + 1);
+
+        setSelectedTreeItemIds((current) =>
+          Array.from(
+            new Set([
+              ...current,
+              ...rangeIds,
+            ])
+          )
+        );
+        return;
+      }
+    }
+
+    if (isToggle) {
+      setSelectedTreeItemIds((current) =>
+        current.includes(itemId)
+          ? current.filter((id) => id !== itemId)
+          : [
+            ...current,
+            itemId,
+          ]
+      );
+      setLastSelectedTreeItemId(itemId);
+      return;
+    }
+
+    setSelectedTreeItemIds([itemId]);
+    setLastSelectedTreeItemId(itemId);
+  }
+
   function renderSavedAPIButton(
     api: SavedAPIItem
   ) {
+    const itemId =
+      getAPIItemId(api.id);
+    const isSelected =
+      selectedTreeItemIds.includes(itemId);
+
     return (
       <div
         key={api.id}
@@ -8792,6 +9115,9 @@ const Home: React.FC = () => {
         }}
         onContextMenu={(event) => {
           event.preventDefault();
+          if (!selectedTreeItemIds.includes(itemId)) {
+            applyTreeSelection(itemId, event);
+          }
           setSelectedSavedAPIId(api.id);
           setContextMenu({
             type: "api",
@@ -8800,8 +9126,13 @@ const Home: React.FC = () => {
             y: event.clientY,
           });
         }}
-        onClick={() => {
-          setSelectedSavedAPIId(api.id);
+        onClick={(event) => {
+          applyTreeSelection(itemId, event);
+          setSelectedSavedAPIId(
+            (event.ctrlKey || event.metaKey) && isSelected
+              ? null
+              : api.id
+          );
         }}
         // className={`
         //   flex w-full items-center gap-1 rounded-[4px] py-1.5 pl-2 pr-2 text-left hover:bg-gray-2/50 cursor-grab active:cursor-grabbing select-none
@@ -8812,7 +9143,7 @@ const Home: React.FC = () => {
         // `}
         className={`
           group flex w-full items-center gap-1 rounded-[4px] py-1.5 pl-2 pr-2 text-left hover:bg-gray-2/50 cursor-grab active:cursor-grabbing select-none
-          ${selectedSavedAPIId === api.id
+          ${isSelected
             ? "bg-gray-2/50"
             : ""
           }
@@ -8874,6 +9205,10 @@ const Home: React.FC = () => {
         );
       const folderKey =
         `${collection}/${path}`;
+      const itemId =
+        getFolderItemId(collection, path);
+      const isSelected =
+        selectedTreeItemIds.includes(itemId);
       const expanded =
         expandedFolders.includes(
           folderKey
@@ -8965,7 +9300,9 @@ const Home: React.FC = () => {
                 console.error("Failed to parse drag data:", err);
               }
             }}
-            onClick={() => {
+            onClick={(event) => {
+              applyTreeSelection(itemId, event);
+              setSelectedSavedAPIId(null);
               setSelectedCollectionTarget({
                 collection,
                 folder:
@@ -8977,6 +9314,10 @@ const Home: React.FC = () => {
             }}
             onContextMenu={(event) => {
               event.preventDefault();
+              if (!selectedTreeItemIds.includes(itemId)) {
+                applyTreeSelection(itemId, event);
+              }
+              setSelectedSavedAPIId(null);
               setContextMenu({
                 type: "folder",
                 collection,
@@ -8992,8 +9333,7 @@ const Home: React.FC = () => {
             }}
             className={`
               flex items-center justify-between gap-2 rounded-[4px] px-2 py-2 text-base font-semibold tracking-wide text-white hover:bg-gray-2/50 cursor-pointer
-              ${selectedCollectionTarget.collection === collection &&
-                selectedCollectionTarget.folder === path
+              ${isSelected
                 ? "bg-gray-2/50"
                 : ""
               }
@@ -9027,7 +9367,7 @@ const Home: React.FC = () => {
             </span>
           </div>
           {expanded && (
-            <div className="ml-[16px] border-l border-white/10 pl-2">
+            <div className="ml-[16px] border-l border-white/10 pl-[8px]">
               {apis.map(renderSavedAPIButton)}
               {renderFolderTree(
                 collection,
@@ -9066,7 +9406,7 @@ const Home: React.FC = () => {
       return (
         <div
           key={`save-${folderKey}`}
-          className={depth > 0 ? "ml-4 border-l border-white/10 pl-2" : ""}
+          className="ml-[16px] border-l border-white/10 pl-2"
         >
           <button
             type="button"
@@ -9103,13 +9443,6 @@ const Home: React.FC = () => {
                 />
               )}
               <span className="min-w-0 truncate">{folder.name}</span>
-            </span>
-            <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-[10px] text-white/45">
-              {getFolderAPICount(
-                collection,
-                folder,
-                path
-              )}
             </span>
           </button>
           {expanded &&
@@ -9177,11 +9510,6 @@ const Home: React.FC = () => {
                       />
                     )}
                     <span className="min-w-0 truncate">{collection.name}</span>
-                  </span>
-                  <span className="shrink-0 rounded-full bg-white/10 px-1.5 text-[10px] text-white/45">
-                    {getCollectionAPICount(
-                      collection.name
-                    )}
                   </span>
                 </button>
                 {expanded &&
@@ -9308,7 +9636,7 @@ const Home: React.FC = () => {
   return (
     <div className='w-full flex-1 flex min-h-0'>
       {/* left menu */}
-      <div className='w-[50px] h-full bg-black-1 border-r border-r-gray-2 flex flex-col items-center'>
+      <div className='w-[48px] h-full bg-black-1 border-r border-r-gray-2 flex flex-col items-center'>
         <button
           type="button"
           onClick={() => {
@@ -9320,7 +9648,7 @@ const Home: React.FC = () => {
             : "border-l-transparent"
             }`}
         >
-          <RxFileTextIcon size={28} className='mr-1 text-white/80' />
+          <FileText size={28} className={`${sidebarMode === "documentation" ? 'text-white/80' : 'text-white/30'} mr-1 hover:text-white/80`} />
         </button>
         <button
           type="button"
@@ -9337,7 +9665,7 @@ const Home: React.FC = () => {
           <BiCollectionIcon size={28} className={`mr-1 ${sidebarMode === "collections"
             ? "text-white/80"
             : "text-white/30"
-            }`} />
+            } hover:text-white/80`} />
         </button>
         <button
           type="button"
@@ -9411,23 +9739,23 @@ const Home: React.FC = () => {
                   </div>
                 )}
               {sidebarMode !== "collections" && (
-                <div className='w-full rounded-md outline outline-1 outline-gray-1/50 bg-gray-3 flex pl-2 gap-2'>
+                <div className='w-full rounded-sm outline outline-1 outline-gray-1/50 bg-gray-3 flex pl-2 gap-2'>
                   <div className={`w-2.5 h-2.5 min-w-2.5 min-h-2.5 rounded-full my-auto ${schemaStatus === "error"
                     ? "bg-red-500"
                     : "bg-green-1"
                     }`}></div>
                   <div className="relative min-w-0 flex-1">
                     <div className="pointer-events-none absolute inset-0 flex items-center overflow-hidden whitespace-pre rounded-sm px-2 text-left font-inherit text-white">
-                      {lastEndpoint
-                        ? renderHighlightedEnvironmentText(lastEndpoint)
+                      {endpointDraft
+                        ? renderHighlightedEnvironmentText(endpointDraft)
                         : <span className="text-white/30">Enter URL</span>}
                     </div>
                     <input
-                      value={lastEndpoint}
-                      onChange={e => { dispatch(setEndpoint(e.target.value)) }}
+                      value={endpointDraft}
+                      onChange={e => { setEndpointDraft(e.target.value) }}
                       spellCheck={false}
                       list="environment-variable-options"
-                      className='relative h-10 w-full rounded-sm px-2 bg-transparent text-left text-transparent caret-white outline-none placeholder:text-transparent'
+                      className='relative h-[38px] w-full rounded-sm px-2 bg-transparent text-left text-transparent caret-white outline-none placeholder:text-transparent'
                       placeholder=''
                       aria-label="Endpoint URL"
                     />
@@ -9482,14 +9810,14 @@ const Home: React.FC = () => {
                           name: "",
                         })
                       }
-                      className="inline-flex h-8 items-center gap-1 rounded-[4px] bg-white/10 px-2 text-base -mt-1 font-semibold text-white/70 hover:bg-white/15 hover:text-white"
+                      className="inline-flex h-8 items-center gap-1 rounded-[4px] bg-white/10 px-2 text-base font-semibold text-white/70 hover:bg-white/15 hover:text-white"
                     >
                       <Plus size={14} />
                       Collection
                     </button>
                   </div>
                 </div>
-                <div className="mt-3 flex h-9 items-center gap-2 mb-2 rounded-md outline outline-1 outline-gray-1/50 bg-gray-3 px-2">
+                <div className="mt-3 flex h-9 items-center gap-2 mb-2 rounded-sm outline outline-1 outline-gray-1/50 bg-gray-3 px-2">
                   <Search size={16} className="text-white/35" />
                   <input
                     value={collectionSearchKeyword}
@@ -9499,7 +9827,7 @@ const Home: React.FC = () => {
                       )
                     }
                     spellCheck={false}
-                    className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-white/30"
+                    className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-white/30"
                     placeholder="Search API, folder, collection"
                   />
                 </div>
@@ -9534,8 +9862,8 @@ const Home: React.FC = () => {
                 }}
               >
                 <div className="w-[680px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 shadow-2xl">
-                  <div className="flex items-center gap-3 border-b border-b-gray-2 px-4 py-3">
-                    <Search size={17} className="text-white/45" />
+                  <div className="flex items-center gap-3 border-b border-b-gray-2 px-3 py-1">
+                    <Search size={22} className="text-white/45" />
                     <input
                       autoFocus
                       value={
@@ -9573,14 +9901,14 @@ const Home: React.FC = () => {
                           ""
                         );
                       }}
-                      className="rounded-[4px] px-2 py-1 text-xs font-semibold text-white/45 hover:bg-white/10 hover:text-white"
+                      className="rounded-[4px] px-2 py-1 text-base font-semibold text-white/45 hover:bg-white/10 hover:text-white"
                     >
                       Esc
                     </button>
                   </div>
 
                   <OverlayScrollbarsComponent
-                    className="max-h-[520px] px-2 py-3"
+                    className="max-h-[520px] px-3 py-3"
                     options={overlayScrollOptions}
                     defer
                   >
@@ -9600,10 +9928,10 @@ const Home: React.FC = () => {
                             key={
                               operationType
                             }
-                            className="px-2 pb-4"
+                            className=""
                           >
-                            <div className="pb-2 text-left text-sm font-medium uppercase tracking-wide text-green-1">
-                              {operationType.toLowerCase()} result
+                            <div className="text-left text-lg font-bold tracking-wide text-green-1">
+                              {operationType} result
                             </div>
                             {results.length > 0 ? (
                               results.map(
@@ -9617,12 +9945,12 @@ const Home: React.FC = () => {
                                         field
                                       )
                                     }
-                                    className="flex w-full items-center justify-between gap-4 rounded-[4px] px-3 py-2 text-left text-base text-white/80 hover:bg-gray-2/50 hover:text-white"
+                                    className="flex w-full font-medium items-center justify-between gap-4 rounded-[4px] px-3 py-1 text-left text-lg text-white/80 hover:bg-gray-2/50 hover:text-white"
                                   >
                                     <span className="min-w-0 truncate">
                                       {field.name}
                                     </span>
-                                    <span className="shrink-0 truncate text-sm text-[#5B8DBD]">
+                                    <span className="shrink-0 truncate text-base text-[#5B8DBD]">
                                       {field.type}
                                     </span>
                                   </button>
@@ -9724,13 +10052,19 @@ const Home: React.FC = () => {
                             expandedCollections.includes(
                               collection.name
                             );
+                          const itemId =
+                            getCollectionItemId(collection.name);
+                          const isSelected =
+                            selectedTreeItemIds.includes(itemId);
                           return (
                             <div
                               key={collection.name}
                               className="pt-0"
                             >
                               <div
-                                onClick={() => {
+                                onClick={(event) => {
+                                  applyTreeSelection(itemId, event);
+                                  setSelectedSavedAPIId(null);
                                   setSelectedCollectionTarget({
                                     collection:
                                       collection.name,
@@ -9743,6 +10077,10 @@ const Home: React.FC = () => {
                                 }}
                                 onContextMenu={(event) => {
                                   event.preventDefault();
+                                  if (!selectedTreeItemIds.includes(itemId)) {
+                                    applyTreeSelection(itemId, event);
+                                  }
+                                  setSelectedSavedAPIId(null);
                                   setContextMenu({
                                     type: "collection",
                                     collection:
@@ -9801,8 +10139,7 @@ const Home: React.FC = () => {
                                 }}
                                 className={`
                                 flex items-center justify-between gap-2 rounded-[4px] px-1 py-2 text-base font-semibold tracking-wide text-white hover:bg-gray-2/50 cursor-pointer
-                                ${selectedCollectionTarget.collection === collection.name &&
-                                    selectedCollectionTarget.folder === ""
+                                ${isSelected
                                     ? "bg-gray-2/50"
                                     : ""
                                   }
@@ -9835,7 +10172,7 @@ const Home: React.FC = () => {
                                 </span>
                               </div>
                               {isExpanded && (
-                                <div className="ml-[12px] border-l border-white/10 pl-2">
+                                <div className="ml-[16px] border-l border-white/10 pl-[8px]">
                                   {rootAPIs.map(
                                     renderSavedAPIButton
                                   )}
@@ -10197,6 +10534,14 @@ const Home: React.FC = () => {
                     />
                     <button
                       type="button"
+                      onClick={importEnvironmentStore}
+                      className="flex h-full w-10 items-center justify-center border-l border-gray-2 text-white/55 hover:bg-white/10 hover:text-white"
+                      title="Import environment"
+                    >
+                      <Upload size={15} />
+                    </button>
+                    <button
+                      type="button"
                       onClick={createEnvironment}
                       className="flex h-full w-10 items-center justify-center border-l border-gray-2 text-white/55 hover:bg-white/10 hover:text-white"
                       title="New environment"
@@ -10256,11 +10601,6 @@ const Home: React.FC = () => {
                         </div>
                       ))}
                   </div>
-                  <div className="flex items-center justify-end gap-1 border-t border-gray-2 p-2">
-                    <button type="button" onClick={importEnvironmentStore} className="rounded-[4px] px-2 py-1 text-xs font-semibold text-white/60 hover:bg-white/10 hover:text-white">
-                      Import
-                    </button>
-                  </div>
                 </div>
               )}
             </div>
@@ -10287,8 +10627,8 @@ const Home: React.FC = () => {
                         onMouseEnter={() => setIsRunButtonHovered(true)}
                         onMouseLeave={() => setIsRunButtonHovered(false)}
                         className={`
-                          inline-flex h-8 min-w-[92px] items-center justify-center gap-2 rounded-[4px] px-3
-                          text-sm font-semibold leading-none transition-colors
+                          inline-flex h-8 pl-2 pr-3 w-fit items-center justify-left gap-2 rounded-[4px]
+                          text-base font-bold leading-none transition-colors
                           ${(canRunOperation || activeWorkTab.subscriptionListening) && !isRunningOperation
                             ? activeWorkTab.subscriptionListening && isRunButtonHovered
                               ? "bg-red-500/80 text-white hover:bg-red-500 cursor-pointer"
@@ -10435,15 +10775,15 @@ const Home: React.FC = () => {
 
             <Panel minSize={"100px"} className='flex flex-col min-h-0'>
               <div className="bg-black-1 flex flex-col flex-1 min-h-0 border-t border-t-gray-2">
-                <div className="flex h-[40px] shrink-0 items-center justify-between border-b border-b-gray-2 px-3">
-                  <div className="flex h-full items-center gap-1">
+                <div className="flex min-h-[40px] shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-b-gray-2 px-3 py-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-1">
                     {(["body", "cookies", "headers"] as ResponsePanelTab[]).map((tab) => (
                       <button
                         key={tab}
                         type="button"
                         onClick={() => setActiveResponsePanelTab(tab)}
                         className={`
-                          h-full px-2 text-sm font-semibold capitalize transition-colors border-b-2
+                          h-8 px-2 text-base font-semibold capitalize transition-colors border-b-2
                           ${activeWorkTab.responsePanelTab === tab
                             ? "border-green-1 text-white"
                             : "border-transparent text-white/45 hover:text-white/75"
@@ -10460,7 +10800,7 @@ const Home: React.FC = () => {
                       </button>
                     ))}
                   </div>
-                  <div className="ml-auto flex items-center gap-3 text-xs text-white/55">
+                  <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs text-white/55">
                     {activeWorkTab.responseStatus && (
                       <span className={`rounded-[3px] px-1.5 py-0.5 font-semibold ${
                         (activeWorkTab.responseStatusCode ?? 0) >= 400
@@ -10993,7 +11333,14 @@ const Home: React.FC = () => {
         </div>
       )}
       {environmentEditorOpen && editingEnvironment && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-5">
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-5"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeEnvironmentEditor();
+            }
+          }}
+        >
           <div className="w-[760px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
             <div className="flex items-center justify-between">
               <input
@@ -11262,8 +11609,17 @@ const Home: React.FC = () => {
           }}
         >
           <div className="w-[460px] max-w-[calc(100vw-40px)] rounded-[6px] border border-gray-1 bg-black-2 p-5 text-left shadow-2xl">
-            <div className="text-base font-semibold text-white">
-              Save API
+            <div className="flex items-center justify-between">
+              <div className="text-base font-semibold text-white">
+                Save API
+              </div>
+              <button
+                type="button"
+                onClick={() => setSaveDialogOpen(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] text-white/60 hover:bg-white/10 hover:text-white"
+              >
+                <X size={16} />
+              </button>
             </div>
             <div className="mt-4 space-y-3">
               <label className="block text-sm font-semibold text-white/70">
@@ -11294,10 +11650,10 @@ const Home: React.FC = () => {
                           name: "",
                         })
                       }
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-[4px] bg-white/10 text-white/70 hover:bg-white/15 hover:text-white"
+                      className="inline-flex h-7 px-2 items-center justify-center rounded-[4px] bg-white/10 text-white/70 hover:bg-white/15 hover:text-white"
                       title="New collection"
                     >
-                      <Plus size={15} />
+                      + Collection
                     </button>
                     <button
                       type="button"
@@ -11313,10 +11669,10 @@ const Home: React.FC = () => {
                           name: "",
                         })
                       }
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-[4px] bg-white/10 text-white/70 hover:bg-white/15 hover:text-white"
+                      className="inline-flex h-7 px-2 items-center justify-center rounded-[4px] bg-white/10 text-white/70 hover:bg-white/15 hover:text-white"
                       title="New folder"
                     >
-                      <ChevronRight size={15} />
+                      + Folder
                     </button>
                   </div>
                 </div>
