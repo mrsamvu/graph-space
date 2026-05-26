@@ -1,9 +1,6 @@
 Package: graph-space
 Version: 1.0.0
-Section: utils
-Priority: optional
 Architecture: amd64
-Depends: libwebkit2gtk-4.1-0, libgtk-3-0
-Maintainer: Your Name <your@email.com>
-Description: Graph Space Application
- A desktop application built with Wails.
+Maintainer: Hùng <hung2811.iuh@gmail.com>
+Description: Graph Space App
+Depends: libgtk-3-0, libwebkit2gtk-4.1-0

@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Graph Space
-Exec=/usr/local/bin/graph-space
-Icon=graph-space
+Exec=/usr/local/bin/graph-space_v1.0.0
+Icon=appicon
 Type=Application
 Categories=Utility;
