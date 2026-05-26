@@ -416,6 +416,7 @@ const Home: React.FC = () => {
     path: string;
     position: "before" | "inside" | "after";
   } | null>(null);
+  const textareaReportPopupRef = useRef(null);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [savePickerExpandedCollections, setSavePickerExpandedCollections] = useState<string[]>([]);
   const [savePickerExpandedFolders, setSavePickerExpandedFolders] = useState<string[]>([]);
@@ -1855,6 +1856,21 @@ const Home: React.FC = () => {
 
     return builder.finish();
   }
+
+  const handleDescriptionChange = (event: { target: { value: string; }; }) => {
+    if (!textareaReportPopupRef.current) return;
+    const value = event.target.value.substring(0, 2000);
+    
+    // 3. FIX LỖI WAILS: Khi xóa hết ký tự, ép tọa độ cuộn của Webview về đỉnh lập tức
+    if (value === '' && textareaReportPopupRef.current) {
+      (textareaReportPopupRef.current as any).scrollTop = 0;
+    }
+
+    setBugReportDraft((draft) => ({
+      ...draft,
+      description: value,
+    }));
+  };
 
   const environmentHighlightField =
     StateField.define<DecorationSet>({
@@ -9699,7 +9715,7 @@ const Home: React.FC = () => {
             <Settings size={24} />
           </button>
           {settingsMenuOpen && (
-            <div className="fixed bottom-3 left-[58px] z-[120] w-[180px] rounded-[6px] border border-gray-1 bg-black-2 py-1 text-left shadow-2xl">
+            <div className="fixed bottom-2 left-[48px] z-[120] w-[180px] rounded-[6px] border border-gray-1 bg-black-2 py-1 text-left shadow-2xl">
               <button
                 type="button"
                 onClick={() => {
@@ -11734,7 +11750,7 @@ const Home: React.FC = () => {
                 <X size={16} />
               </button>
             </div>
-            <div className="mt-4 space-y-3">
+            <div className="mt-4">
               <label className="block text-sm font-semibold text-white/70">
                 <span className="flex items-center justify-between gap-2">
                   <span>Title</span>
@@ -11749,32 +11765,34 @@ const Home: React.FC = () => {
                     setBugReportDraft((draft) => ({
                       ...draft,
                       title:
-                        event.target.value,
+                        event.target.value.substring(0, 100),
                     }))
                   }
                   className="mt-1 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
                 />
               </label>
               <label className="block text-sm font-semibold text-white/70">
-                Bug description
+                <div className='flex justify-between mt-5'>
+                  Bug description
+                  <div className="mt-0.5 text-right text-xs text-white/35">
+                    {bugReportDraft.description.length}/2000
+                  </div>
+                </div>
                 <textarea
+                  ref={textareaReportPopupRef}
                   value={bugReportDraft.description}
                   maxLength={2000}
-                  onChange={(event) =>
-                    setBugReportDraft((draft) => ({
-                      ...draft,
-                      description:
-                        event.target.value,
-                    }))
-                  }
-                  className="mt-1 min-h-[130px] w-full resize-y rounded-[4px] border border-gray-1 bg-gray-3 px-2 py-2 text-white outline-none focus:border-green-1"
+                  onChange={handleDescriptionChange}
+                  className="mt-1 min-h-[130px] resize-none w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 py-2 text-white outline-none focus:border-green-1"
                 />
-                <div className="mt-1 text-right text-xs text-white/35">
-                  {bugReportDraft.description.length}/2000
-                </div>
               </label>
-              <label className="block text-sm font-semibold text-white/70">
-                Device / OS
+              <label className="block text-sm font-semibold text-white/70 mt-4">
+                <div className='flex justify-between'>  
+                  Device / OS
+                  <div className="mt-0.5 text-right text-xs text-white/35">
+                    {bugReportDraft.deviceOs.length}/100
+                  </div>
+                </div>
                 <input
                   value={bugReportDraft.deviceOs}
                   maxLength={100}
@@ -11782,16 +11800,13 @@ const Home: React.FC = () => {
                     setBugReportDraft((draft) => ({
                       ...draft,
                       deviceOs:
-                        event.target.value,
+                        event.target.value.substring(0, 100),
                     }))
                   }
                   className="mt-1 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
                 />
-                <div className="mt-1 text-right text-xs text-white/35">
-                  {bugReportDraft.deviceOs.length}/100
-                </div>
               </label>
-              <div className="text-sm font-semibold text-white/70">
+              <div className="text-sm flex flex-col mt-5 font-semibold text-white/70">
                 Tags
                 <div className="mt-2 flex flex-wrap gap-2">
                   {bugReportTagOptions.map((tag) => {
@@ -11814,7 +11829,7 @@ const Home: React.FC = () => {
                   })}
                 </div>
               </div>
-              <div className="text-sm font-semibold text-white/70">
+              <div className="text-sm font-semibold text-white/70 mt-5">
                 Attachments
                 <div className="mt-2 rounded-[4px] border border-gray-1/70 bg-black-1 p-2">
                   <div className="flex items-center justify-between gap-3">

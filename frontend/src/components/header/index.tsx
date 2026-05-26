@@ -239,14 +239,14 @@ export const Header: React.FC = () => {
               setWorkspaceOpen((value) => !value)
             }
             className={`
-              inline-flex h-8 max-w-[240px] items-center gap-2 rounded-[4px] border px-2.5 text-sm text-white/85 transition
+              inline-flex h-8 max-w-[240px] items-center text-base gap-2 rounded-[4px] border px-2.5 font-medium text-white/85 transition
               ${workspaceOpen
                 ? "border-gray-1 bg-gray-2/30"
                 : "border-transparent hover:border-gray-1/60 hover:bg-gray-2/30"
               }
             `}
           >
-            <Briefcase size={15} className="shrink-0 text-green-1" />
+            {/* <Briefcase size={15} className="shrink-0 text-green-1" /> */}
             <span className="min-w-0 truncate">
               {activeWorkspace?.name ?? "My Workspace"}
             </span>
@@ -254,16 +254,16 @@ export const Header: React.FC = () => {
           </button>
           {workspaceOpen && (
             <div className="absolute left-9 top-[40px] z-[80] w-[390px] rounded-[4px] border border-gray-1 bg-black-2 p-4 text-left shadow-2xl">
-              <div className="flex items-center gap-6">
+              <div className="flex items-center gap-2">
                 <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-[4px] border border-gray-1 bg-black-1 px-2 focus-within:border-green-1/70">
-                  <Search size={15} className="shrink-0 text-white/35" />
+                  <Search size={15} className="shrink-0 text-white/60" />
                   <input
                     value={workspaceSearch}
                     onChange={(event) =>
                       setWorkspaceSearch(event.target.value)
                     }
                     placeholder="Search workspace"
-                    className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/30"
+                    className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/60"
                   />
                 </div>
                   <button
@@ -314,11 +314,11 @@ export const Header: React.FC = () => {
                             }
                           `}
                         >
-                          {index === 0 ? (
+                          {/* {index === 0 ? (
                             <LockKeyhole size={15} className="shrink-0 text-white/80" />
                           ) : (
                             <Users size={16} className="shrink-0 text-white/80" />
-                          )}
+                          )} */}
                           <span className="min-w-0 truncate">
                             {workspace.name}
                           </span>
