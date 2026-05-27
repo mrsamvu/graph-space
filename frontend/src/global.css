@@ -3,23 +3,60 @@
 @tailwind utilities;
 
 @layer base {
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: transparent transparent;
-    scrollbar-gutter: stable;
+  @font-face {
+    font-family: "Nunito";
+    font-style: normal;
+    font-weight: 400;
+    src: local(""),
+         url("./assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
+  }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    background-color: #121212;
+    color: white;
+    scrollbar-gutter: auto;
   }
 
   body {
-    @apply bg-black-1
+    margin: 0;
+    color: white;
+    font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    @apply bg-black-1;
   }
 
-  *:hover {
-    scrollbar-color: rgba(190, 197, 208, 0.7) rgba(255, 255, 255, 0.04);
+  img {
+    -webkit-user-drag: none;
+    user-select: none;
   }
 
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(156, 163, 175, 0.3) transparent;
+    box-sizing: border-box;
+  }
+
+  /* Consistent scrollbar styling for both WebKitGTK (Linux) and WebView2 (Windows) */
   *::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
   }
 
   *::-webkit-scrollbar-track {
@@ -28,38 +65,30 @@
   }
 
   *::-webkit-scrollbar-thumb {
-    background: transparent;
-    background-clip: content-box;
-    border: 2px solid transparent;
+    background: rgba(156, 163, 175, 0.2);
     border-radius: 999px;
-  }
-
-  *:hover::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.04);
+    background-clip: padding-box;
+    border: 1px solid transparent;
+    transition: background-color 0.2s ease;
   }
 
   *:hover::-webkit-scrollbar-thumb {
-    background: linear-gradient(
-      180deg,
-      rgba(220, 226, 235, 0.82),
-      rgba(137, 146, 158, 0.72)
-    );
-    background-clip: content-box;
-    border: 2px solid transparent;
+    background: rgba(156, 163, 175, 0.45);
+    background-clip: padding-box;
+    border: 1px solid transparent;
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(
-      180deg,
-      rgba(240, 244, 248, 0.95),
-      rgba(165, 174, 187, 0.9)
-    );
+    background: rgba(156, 163, 175, 0.7);
+    background-clip: padding-box;
+    border: 1px solid transparent;
   }
 
   *::-webkit-scrollbar-corner {
     background: transparent;
   }
 
+  /* OverlayScrollbars theme configurations */
   .os-theme-graph-space {
     --os-size: 8px;
     --os-padding-perpendicular: 1px;

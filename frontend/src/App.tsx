@@ -2,7 +2,6 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import Home from './pages/home';
 import PostDetail from './pages/postDetail';
-import "./global.css"
 import { Header } from './components/header';
 // import Home from './pages/Home';
 // import PostDetail from './pages/PostDetail';

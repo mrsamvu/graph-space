@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import './style.css'
+import './global.css'
 import App from './App'
 import { Provider, useDispatch } from 'react-redux';
 import { LoadState } from '../wailsjs/go/main/App'; // Đảm bảo đường dẫn này trỏ chuẩn tới wailsjs
