@@ -1,0 +1,7 @@
+Package: graph-space
+Version: 1.0.0
+Architecture: amd64
+Maintainer: hung <hung2811.iuh@gmail.com>
+Description: Graph Space
+ Ung dung kiem thu graphql offline.
+Depends: libgtk-3-0, libwebkit2gtk-4.1-0

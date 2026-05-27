@@ -983,9 +983,8 @@ func (a *App) DeleteWorkspace(id string) (Workspace, error) {
 		store.ActiveWorkspaceID = store.Workspaces[0].ID
 	}
 
-	if err := os.RemoveAll(a.workspaceDataDir(workspaceID)); err != nil {
-		return Workspace{}, err
-	}
+	// Best-effort cleanup of workspace directory. Do not fail the whole deletion if this fails.
+	_ = os.RemoveAll(a.workspaceDataDir(workspaceID))
 
 	if err := a.writeWorkspaceStore(store); err != nil {
 		return Workspace{}, err

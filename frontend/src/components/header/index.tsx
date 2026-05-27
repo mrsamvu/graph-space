@@ -124,7 +124,7 @@ export const Header: React.FC = () => {
 
   async function createWorkspace() {
     const value =
-      newWorkspaceName.trim();
+      newWorkspaceName.trim().slice(0, 50);
 
     if (!value) {
       return;
@@ -394,23 +394,28 @@ export const Header: React.FC = () => {
             <div className="text-base font-semibold text-white">
               Create Workspace
             </div>
-            <input
-              autoFocus
-              value={newWorkspaceName}
-              onChange={(event) =>
-                setNewWorkspaceName(event.target.value)
-              }
-              onInput={() =>
-                setWorkspaceDialogError("")
-              }
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  createWorkspace();
+            <div className="relative mt-4">
+              <input
+                autoFocus
+                value={newWorkspaceName}
+                onChange={(event) =>
+                  setNewWorkspaceName(event.target.value.substring(0, 50))
                 }
-              }}
-              placeholder="Workspace name"
-              className="mt-4 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-sm text-white outline-none placeholder:text-white/30 focus:border-green-1"
-            />
+                onInput={() =>
+                  setWorkspaceDialogError("")
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    createWorkspace();
+                  }
+                }}
+                placeholder="Workspace name"
+                className="h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 pl-2 pr-12 text-sm text-white outline-none placeholder:text-white/30 focus:border-green-1"
+              />
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-white/40">
+                {newWorkspaceName.length}/50
+              </span>
+            </div>
             {workspaceDialogError && (
               <div className="mt-2 text-sm text-red-300">
                 {workspaceDialogError}

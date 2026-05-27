@@ -1,6 +1,0 @@
-Package: graph-space
-Version: 1.0.0
-Architecture: amd64
-Maintainer: Hùng <hung2811.iuh@gmail.com>
-Description: Graph Space App
-Depends: libgtk-3-0, libwebkit2gtk-4.1-0

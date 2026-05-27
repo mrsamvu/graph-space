@@ -763,12 +763,29 @@ const Home: React.FC = () => {
           ListSavedCollections(),
         ]);
 
-      setSavedAPIs(
-        (apis ?? []) as SavedAPIItem[]
-      );
+      const freshApis = (apis ?? []) as SavedAPIItem[];
+      setSavedAPIs(freshApis);
       setSavedCollections(
         (collections ?? []) as SavedCollectionItem[]
       );
+
+      setWorkTabs((tabs) =>
+        tabs.map((tab) => {
+          if (
+            tab.savedApiId &&
+            !freshApis.some((api) => api.id === tab.savedApiId)
+          ) {
+            return {
+              ...tab,
+              savedApiId: undefined,
+              collection: undefined,
+              folder: undefined,
+            };
+          }
+          return tab;
+        })
+      );
+
       GetCloudSyncState()
         .then((state) =>
           setCloudSyncState(
@@ -1048,6 +1065,7 @@ const Home: React.FC = () => {
         "";
 
       if (
+        schemaRef.current !== null &&
         lastIntrospectionRef.current ===
         introspectionSignature
       ) {
@@ -7248,6 +7266,48 @@ const Home: React.FC = () => {
     syncClickedArgumentVariable();
   }
 
+  const allFieldsChecked = filteredFields.length > 0 && filteredFields.every((field) => {
+    const isRootType =
+      currentType === "Query" ||
+      currentType === "Mutation" ||
+      currentType === "Subscription";
+    const rootFieldName = isRootType ? field.name : stack[2]?.fieldName;
+    const targetPath = isRootType ? [] : stack.slice(3).map((s) => s.fieldName!).filter(Boolean);
+    return rootFieldName ? selectionExistsInActiveOperation(rootFieldName, targetPath, field.name) : false;
+  });
+
+  const handleToggleAllFields = () => {
+    const isRootType =
+      currentType === "Query" ||
+      currentType === "Mutation" ||
+      currentType === "Subscription";
+    const nextCheck = !allFieldsChecked;
+    filteredFields.forEach((field) => {
+      const rootFieldName = isRootType ? field.name : stack[2]?.fieldName;
+      const targetPath = isRootType ? [] : stack.slice(3).map((s) => s.fieldName!).filter(Boolean);
+      if (!rootFieldName) return;
+      const isChecked = selectionExistsInActiveOperation(rootFieldName, targetPath, field.name);
+      if (isChecked !== nextCheck) {
+        handleFieldClick(rootFieldName, targetPath, field, nextCheck);
+      }
+    });
+  };
+
+  const allArgsChecked = !!selectedField && selectedField.args.length > 0 && selectedField.args.every((arg) =>
+    rootArgumentExistsInActiveOperation(selectedField.name, arg.name)
+  );
+
+  const handleToggleAllArgs = () => {
+    if (!selectedField) return;
+    const nextCheck = !allArgsChecked;
+    selectedField.args.forEach((arg) => {
+      const isChecked = rootArgumentExistsInActiveOperation(selectedField.name, arg.name);
+      if (isChecked !== nextCheck) {
+        handleArgumentClick(selectedField, arg.name, nextCheck);
+      }
+    });
+  };
+
   function saveActiveWorkTabFromEditors() {
     if (!activeWorkTab) {
       return;
@@ -7307,7 +7367,7 @@ const Home: React.FC = () => {
         ) || "Untitled API",
       collection:
         snapshot.collection ||
-        "Default",
+        "",
       folder:
         snapshot.folder ||
         "",
@@ -7318,6 +7378,18 @@ const Home: React.FC = () => {
   async function saveActiveTab(
     draft = saveDialogDraft
   ) {
+    const nameVal = (draft.name || "").trim();
+    if (!nameVal) {
+      showToast("error", "File name cannot be empty.");
+      return;
+    }
+
+    const collectionVal = (draft.collection || "").trim();
+    if (!collectionVal) {
+      showToast("error", "Please select a collection to save your API.");
+      return;
+    }
+
     const snapshot =
       getActiveWorkTabSnapshot();
 
@@ -7327,12 +7399,9 @@ const Home: React.FC = () => {
           snapshot.savedApiId ||
           "",
         name:
-          draft.name ||
-          snapshot.title ||
-          "Untitled API",
+          nameVal.slice(0, 100),
         collection:
-          draft.collection ||
-          "Default",
+          collectionVal,
         folder:
           draft.folder ||
           "",
@@ -8082,7 +8151,7 @@ const Home: React.FC = () => {
     name: string
   ) {
     const value =
-      name.trim();
+      name.trim().slice(0, 64);
 
     if (!value) {
       return;
@@ -8130,7 +8199,7 @@ const Home: React.FC = () => {
     name: string
   ) {
     const value =
-      name.trim();
+      name.trim().slice(0, 64);
 
     if (!value) {
       return;
@@ -8199,7 +8268,7 @@ const Home: React.FC = () => {
     const oldName =
       collectionDialog.oldName;
     const newName =
-      collectionDialog.name.trim();
+      collectionDialog.name.trim().slice(0, 64);
 
     if (!oldName || !newName) {
       return;
@@ -8219,10 +8288,11 @@ const Home: React.FC = () => {
   }
 
   async function renameFolderAction() {
+    const newName = folderDialog.name.trim().slice(0, 64);
     if (
       !folderDialog.collection ||
       !folderDialog.folderPath ||
-      !folderDialog.name.trim()
+      !newName
     ) {
       return;
     }
@@ -8233,7 +8303,7 @@ const Home: React.FC = () => {
       folderPath:
         folderDialog.folderPath,
       newName:
-        folderDialog.name,
+        newName,
     } as any);
     setFolderDialog({
       open: false,
@@ -10322,8 +10392,19 @@ const Home: React.FC = () => {
 
                       {/* args */}
                       <div className="mt-5">
-                        <div className="text-lg ml-3 font-bold text-left tracking-wide text-white mb-2">
-                          Arguments
+                        <div className="flex justify-between items-center mb-2 px-3">
+                          <div className="text-lg font-bold text-left tracking-wide text-white">
+                            Arguments
+                          </div>
+                          {selectedField.args.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleToggleAllArgs}
+                              className="text-xs font-semibold px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-colors animate-fade-in"
+                            >
+                              {allArgsChecked ? "Uncheck All" : "Check All"}
+                            </button>
+                          )}
                         </div>
 
                         {selectedField.args
@@ -10393,8 +10474,19 @@ const Home: React.FC = () => {
                       options={overlayScrollOptions}
                       defer
                     >
-                      <div className="ml-2.5 text-lg font-bold text-left tracking-wide text-white mb-2">
-                        Fields
+                      <div className="flex justify-between items-center mb-2 px-2.5">
+                        <div className="text-lg font-bold text-left tracking-wide text-white">
+                          Fields
+                        </div>
+                        {filteredFields.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleToggleAllFields}
+                            className="text-xs font-semibold px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-colors animate-fade-in"
+                          >
+                            {allFieldsChecked ? "Uncheck All" : "Check All"}
+                          </button>
+                        )}
                       </div>
                       {
                         filteredFields.map((field) => {
@@ -11197,19 +11289,24 @@ const Home: React.FC = () => {
             <div className="text-base font-semibold text-white">
               {collectionDialog.mode === "create" ? "Create collection" : "Rename collection"}
             </div>
-            <input
-              autoFocus
-              value={collectionDialog.name}
-              onChange={(event) =>
-                setCollectionDialog((dialog) => ({
-                  ...dialog,
-                  name:
-                    event.target.value,
-                }))
-              }
-              className="mt-4 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none"
-              placeholder="Collection name"
-            />
+            <div className="relative mt-4">
+              <input
+                autoFocus
+                value={collectionDialog.name}
+                onChange={(event) =>
+                  setCollectionDialog((dialog) => ({
+                    ...dialog,
+                    name:
+                      event.target.value.substring(0, 64),
+                  }))
+                }
+                className="h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 pl-2 pr-12 text-white outline-none focus:border-green-1"
+                placeholder="Collection name"
+              />
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-white/40">
+                {collectionDialog.name.length}/64
+              </span>
+            </div>
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
@@ -11250,19 +11347,24 @@ const Home: React.FC = () => {
               {folderDialog.collection}
               {folderDialog.parentPath ? ` / ${folderDialog.parentPath}` : ""}
             </div>
-            <input
-              autoFocus
-              value={folderDialog.name}
-              onChange={(event) =>
-                setFolderDialog((dialog) => ({
-                  ...dialog,
-                  name:
-                    event.target.value,
-                }))
-              }
-              className="mt-3 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
-              placeholder="Folder name"
-            />
+            <div className="relative mt-3">
+              <input
+                autoFocus
+                value={folderDialog.name}
+                onChange={(event) =>
+                  setFolderDialog((dialog) => ({
+                    ...dialog,
+                    name:
+                      event.target.value.substring(0, 64),
+                  }))
+                }
+                className="h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 pl-2 pr-12 text-white outline-none focus:border-green-1"
+                placeholder="Folder name"
+              />
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-white/40">
+                {folderDialog.name.length}/64
+              </span>
+            </div>
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
@@ -11305,18 +11407,23 @@ const Home: React.FC = () => {
             <div className="text-base font-semibold text-white">
               Rename API
             </div>
-            <input
-              autoFocus
-              value={apiDialog.name}
-              onChange={(event) =>
-                setApiDialog((dialog) => ({
-                  ...dialog,
-                  name: event.target.value,
-                }))
-              }
-              className="mt-4 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
-              placeholder="API name"
-            />
+            <div className="relative mt-4">
+              <input
+                autoFocus
+                value={apiDialog.name}
+                onChange={(event) =>
+                  setApiDialog((dialog) => ({
+                    ...dialog,
+                    name: event.target.value.substring(0, 100),
+                  }))
+                }
+                className="h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 pl-2 pr-14 text-white outline-none focus:border-green-1"
+                placeholder="API name"
+              />
+              <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-white/40">
+                {apiDialog.name.length}/100
+              </span>
+            </div>
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
@@ -11335,7 +11442,7 @@ const Home: React.FC = () => {
                 type="button"
                 onClick={async () => {
                   if (apiDialog.name.trim()) {
-                    await RenameSavedAPI(apiDialog.apiId, apiDialog.name.trim());
+                    await RenameSavedAPI(apiDialog.apiId, apiDialog.name.trim().slice(0, 100));
                     setApiDialog({ open: false, apiId: "", name: "" });
                     await refreshSavedAPIs();
                   }
@@ -11492,7 +11599,7 @@ const Home: React.FC = () => {
               <div>
                 <div className="text-base font-semibold text-white">Google Drive Sync</div>
                 <div className="mt-1 text-xs text-white/45">
-                  Collection data syncs to Google Drive appdata. Environment data stays local.
+                  All data syncs to Google Drive appdata.
                 </div>
               </div>
               <div className="flex items-center gap-1">
@@ -11638,20 +11745,25 @@ const Home: React.FC = () => {
               </button>
             </div>
             <div className="mt-4 space-y-3">
-              <label className="block text-sm font-semibold text-white/70">
-                File name
+              <div className="block text-sm font-semibold text-white/70">
+                <div className="flex items-center justify-between">
+                  <span>File name</span>
+                  <span className="text-xs text-white/40 font-normal">
+                    {saveDialogDraft.name.length}/100
+                  </span>
+                </div>
                 <input
                   value={saveDialogDraft.name}
                   onChange={(event) =>
                     setSaveDialogDraft((draft) => ({
                       ...draft,
                       name:
-                        event.target.value,
+                        event.target.value.substring(0, 100),
                     }))
                   }
                   className="mt-1 h-9 w-full rounded-[4px] border border-gray-1 bg-gray-3 px-2 text-white outline-none focus:border-green-1"
                 />
-              </label>
+              </div>
               <div className="block text-sm font-semibold text-white/70">
                 <div className="flex items-center justify-between">
                   <span>Location</span>

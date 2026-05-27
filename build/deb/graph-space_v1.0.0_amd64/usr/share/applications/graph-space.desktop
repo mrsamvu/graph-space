@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Graph Space
+Exec=/usr/local/bin/graph-space_v1.0.0_amd64
+Icon=/usr/share/icons/hicolor/512x512/apps/appicon.png
+Type=Application
+Categories=Utility;
+StartupWMClass=graph-space_v1.0.0_amd64
